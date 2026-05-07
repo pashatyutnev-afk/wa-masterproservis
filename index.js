@@ -40,18 +40,78 @@ function pick(obj, paths, fallback = '') {
   return fallback;
 }
 
+function looksLikePhone(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+
+  const full = raw.match(/(?:\+?7|8)[\s\-()]*\d{3}[\s\-()]*\d{3}[\s\-()]*\d{2}[\s\-()]*\d{2}/);
+  if (full) return normalizePhone(full[0]);
+
+  const compact = raw.replace(/\D/g, '');
+  if (/^7\d{9}$/.test(compact)) return normalizePhone(compact);
+  if (/^(?:7|8)\d{10}$/.test(compact)) return normalizePhone(compact);
+
+  return '';
+}
+
 function findFirstPhone(obj) {
   const direct = pick(obj, [
-    'client.phone', 'client_phone', 'phone', 'customer.phone', 'customer_phone',
-    'lead.phone', 'appeal.phone', 'order.client.phone', 'data.client.phone',
-    'data.phone', 'data.customer.phone', 'contact.phone'
+    'client.phone', 'client.mobile', 'client.telephone', 'client.phone_number',
+    'client.phones.0.phone', 'client.phones.0.number', 'client.phones.0.value',
+    'client.contacts.0.phone', 'client.contacts.0.value',
+    'client_phone', 'phone', 'mobile', 'telephone', 'phone_number',
+    'customer.phone', 'customer.mobile', 'customer.phone_number',
+    'customer.phones.0.phone', 'customer.phones.0.number', 'customer.phones.0.value',
+    'customer_phone',
+    'lead.phone', 'lead.mobile', 'appeal.phone', 'appeal.mobile',
+    'order.client.phone', 'order.client.mobile', 'order.client.phone_number',
+    'order.client.phones.0.phone', 'order.client.phones.0.number', 'order.client.phones.0.value',
+    'data.client.phone', 'data.client.mobile', 'data.client.phone_number',
+    'data.client.phones.0.phone', 'data.client.phones.0.number', 'data.client.phones.0.value',
+    'data.phone', 'data.mobile', 'data.phone_number',
+    'data.customer.phone', 'data.customer.mobile', 'data.customer.phone_number',
+    'contact.phone', 'contact.mobile', 'contact.phone_number'
   ]);
-  const normalizedDirect = normalizePhone(direct);
+  const normalizedDirect = looksLikePhone(direct);
   if (normalizedDirect) return normalizedDirect;
 
+  const candidates = [];
+  const seen = new Set();
+  function walk(node, path = '', depth = 0) {
+    if (node == null || depth > 10) return;
+    if (typeof node === 'string' || typeof node === 'number') {
+      const keyLooksPhone = /phone|mobile|tel|contact|whatsapp|wa/i.test(path);
+      if (keyLooksPhone) {
+        const found = looksLikePhone(node);
+        if (found && !seen.has(found)) {
+          seen.add(found);
+          candidates.push(found);
+        }
+      }
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach((v, i) => walk(v, `${path}.${i}`, depth + 1));
+      return;
+    }
+    if (typeof node === 'object') {
+      for (const [k, v] of Object.entries(node)) walk(v, path ? `${path}.${k}` : k, depth + 1);
+    }
+  }
+  walk(obj);
+  if (candidates.length) return candidates[0];
+
   const text = JSON.stringify(obj || {});
-  const match = text.match(/(?:\+?7|8)[\s\-()]*\d{3}[\s\-()]*\d{3}[\s\-()]*\d{2}[\s\-()]*\d{2}/);
+  const match = text.match(/(?:\+?7|8)[\s\-()]*\d{3}[\s\-()]*\d{3}[\s\-()]*\d{2}[\s\-()]*\d{2}|\b7\d{10}\b|\b8\d{10}\b/);
   return match ? normalizePhone(match[0]) : '';
+}
+
+function compactPayloadPreview(payload) {
+  try {
+    return JSON.stringify(payload).slice(0, 12000);
+  } catch {
+    return '[payload stringify failed]';
+  }
 }
 
 function getEventName(payload) {
@@ -260,7 +320,11 @@ app.post('/ro/webhook', async (req, res) => {
     }
 
     const clientPhone = findFirstPhone(payload);
-    if (!clientPhone) return log('No client phone found, skip WhatsApp template');
+    if (!clientPhone) {
+      log('No client phone found, skip WhatsApp template');
+      log('RemOnline payload preview:', compactPayloadPreview(payload));
+      return;
+    }
 
     const clientName = getClientName(payload);
     const orderNumber = getOrderNumber(payload);
