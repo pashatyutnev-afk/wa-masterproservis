@@ -1095,10 +1095,10 @@ async function handleRepairRequest(payload) {
 }
 
 async function handleOrderEvent(payload) {
-  const statusId = getNewStatusId(payload);
+  const statusIdBeforeApi = getNewStatusId(payload);
 
-  if (INTERNAL_STATUS_IDS.has(statusId)) {
-    log('Internal status, skip WhatsApp:', statusId);
+  if (INTERNAL_STATUS_IDS.has(statusIdBeforeApi)) {
+    log('Internal status, skip WhatsApp:', statusIdBeforeApi);
     return;
   }
 
@@ -1118,6 +1118,16 @@ async function handleOrderEvent(payload) {
   const clientName = getClientName(fullPayload);
   const orderNumber = getOrderNumber(fullPayload);
   const status = getOrderStatus(fullPayload);
+  const statusId = getNewStatusId(fullPayload) || statusIdBeforeApi;
+
+  log('Order status debug:', {
+    eventName: getEventName(payload),
+    statusId: statusId || null,
+    orderId: getRoOrderId(payload) || null,
+    orderNumber,
+    clientName,
+    status
+  });
 
   if (isOrderReady(fullPayload)) {
     await sendTemplate(clientPhone, 'order_ready', [
@@ -1126,7 +1136,7 @@ async function handleOrderEvent(payload) {
       getOrderAmount(fullPayload)
     ]);
 
-    return log('order_ready sent', clientPhone, { clientName, orderNumber });
+    return log('order_ready sent', clientPhone, { clientName, orderNumber, statusId });
   }
 
   if (isOrderClosed(fullPayload)) {
@@ -1134,7 +1144,7 @@ async function handleOrderEvent(payload) {
       clientName
     ]);
 
-    return log('order_review_request sent', clientPhone, { clientName, orderNumber });
+    return log('order_review_request sent', clientPhone, { clientName, orderNumber, statusId });
   }
 
   if (isOrderAccepted(fullPayload)) {
@@ -1143,7 +1153,7 @@ async function handleOrderEvent(payload) {
       orderNumber
     ]);
 
-    return log('order_accepted sent', clientPhone, { clientName, orderNumber });
+    return log('order_accepted sent', clientPhone, { clientName, orderNumber, statusId });
   }
 
   if (isOrderStatusChanged(fullPayload)) {
@@ -1153,7 +1163,7 @@ async function handleOrderEvent(payload) {
       status
     ]);
 
-    return log('order_status_changed sent', clientPhone, { clientName, orderNumber, status });
+    return log('order_status_changed sent', clientPhone, { clientName, orderNumber, status, statusId });
   }
 
   log('No matching order rule, skipped');
