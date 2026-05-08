@@ -90,6 +90,26 @@ function looksLikePhone(value) {
   return '';
 }
 
+function looksLikeOrderNumber(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+
+  return (
+    /^[A-Za-zА-Яа-я]\d{3,}$/.test(text) ||
+    /^\d{6,}$/.test(text)
+  );
+}
+
+function cleanClientName(value) {
+  const text = String(value || '').trim();
+
+  if (!text) return '';
+  if (looksLikePhone(text)) return '';
+  if (looksLikeOrderNumber(text)) return '';
+
+  return text;
+}
+
 function findFirstPhone(obj) {
   const direct = pick(obj, [
     'client.phone',
@@ -451,20 +471,10 @@ async function fetchRoClient(clientId) {
 }
 
 async function enrichRoOrderPayloadWithApi(payload) {
-  const originalPhone = findFirstPhone(payload);
-
-  if (originalPhone) {
-    return {
-      payload,
-      phone: originalPhone,
-      source: 'webhook'
-    };
-  }
-
   const orderId = getRoOrderId(payload);
   const clientIdFromPayload = getRoClientId(payload);
 
-  log('No phone in webhook payload. Trying RO API.', {
+  log('Order webhook: trying RO API first.', {
     orderId: orderId || null,
     clientId: clientIdFromPayload || null
   });
@@ -497,7 +507,8 @@ async function enrichRoOrderPayloadWithApi(payload) {
       'customer.id',
       'data.client.id',
       'order.client.id',
-      'id'
+      'client_id',
+      'customer_id'
     ]);
 
   if (clientId) {
@@ -515,6 +526,18 @@ async function enrichRoOrderPayloadWithApi(payload) {
     } catch (err) {
       log('RO API client lookup failed finally:', err.status || '', err.message);
     }
+  }
+
+  const fallbackPhone = findFirstPhone(payload);
+
+  if (fallbackPhone) {
+    log('WARNING: RO API phone not found, fallback to webhook phone:', fallbackPhone);
+
+    return {
+      payload: { ...payload, ro_api_order: orderData, ro_api_client: clientData },
+      phone: fallbackPhone,
+      source: 'webhook_fallback'
+    };
   }
 
   return {
@@ -614,7 +637,34 @@ function getEventName(payload) {
 }
 
 function getClientName(payload) {
+  const firstName = pick(payload, [
+    'ro_api_client.first_name',
+    'ro_api_order.first_name',
+    'ro_api_order.client.first_name',
+    'ro_api_lead.client.first_name',
+
+    'metadata.client.first_name',
+    'client.first_name',
+    'metadata.order.client.first_name',
+    'order.client.first_name'
+  ], '');
+
   const fullName = pick(payload, [
+    'ro_api_client.name',
+    'ro_api_client.fullname',
+    'ro_api_client.full_name',
+
+    'ro_api_order.name',
+    'ro_api_order.fullname',
+    'ro_api_order.full_name',
+    'ro_api_order.client.name',
+    'ro_api_order.client.fullname',
+    'ro_api_order.client.full_name',
+
+    'ro_api_lead.client.name',
+    'ro_api_lead.client.fullname',
+    'ro_api_lead.client.full_name',
+
     'metadata.client.fullname',
     'metadata.client.full_name',
     'metadata.client.name',
@@ -628,26 +678,6 @@ function getClientName(payload) {
     'order.client.fullname',
     'order.client.full_name',
     'order.client.name',
-
-    'ro_api_client.first_name',
-    'ro_api_client.name',
-    'ro_api_client.fullname',
-    'ro_api_client.full_name',
-
-    'ro_api_order.first_name',
-    'ro_api_order.name',
-    'ro_api_order.fullname',
-    'ro_api_order.full_name',
-
-    'ro_api_order.client.first_name',
-    'ro_api_order.client.name',
-    'ro_api_order.client.fullname',
-    'ro_api_order.client.full_name',
-
-    'ro_api_lead.client.first_name',
-    'ro_api_lead.client.name',
-    'ro_api_lead.client.fullname',
-    'ro_api_lead.client.full_name',
 
     'customer.fullname',
     'customer.name',
@@ -664,18 +694,7 @@ function getClientName(payload) {
     'name'
   ], '');
 
-  const firstName = pick(payload, [
-    'metadata.client.first_name',
-    'client.first_name',
-    'metadata.order.client.first_name',
-    'order.client.first_name',
-    'ro_api_client.first_name',
-    'ro_api_order.first_name',
-    'ro_api_order.client.first_name',
-    'ro_api_lead.client.first_name'
-  ], '');
-
-  return String(firstName || fullName || 'Клиент').trim();
+  return cleanClientName(firstName) || cleanClientName(fullName) || 'Клиент';
 }
 
 function getRepairSubject(payload) {
@@ -720,7 +739,6 @@ function getRepairSubject(payload) {
     'ro_api_lead.name',
     'ro_api_lead.message',
 
-    'ro_api_order.name',
     'ro_api_order.device',
     'ro_api_order.type',
     'ro_api_order.comment',
@@ -1118,7 +1136,7 @@ async function handleOrderEvent(payload) {
   const clientName = getClientName(fullPayload);
   const orderNumber = getOrderNumber(fullPayload);
   const status = getOrderStatus(fullPayload);
-  const statusId = getNewStatusId(fullPayload) || statusIdBeforeApi;
+  const statusId = statusIdBeforeApi || getNewStatusId(fullPayload);
 
   log('Order status debug:', {
     eventName: getEventName(payload),
@@ -1156,17 +1174,11 @@ async function handleOrderEvent(payload) {
     return log('order_accepted sent', clientPhone, { clientName, orderNumber, statusId });
   }
 
-  if (isOrderStatusChanged(fullPayload)) {
-    await sendTemplate(clientPhone, 'order_status_changed', [
-      clientName,
-      orderNumber,
-      status
-    ]);
-
-    return log('order_status_changed sent', clientPhone, { clientName, orderNumber, status, statusId });
-  }
-
-  log('No matching order rule, skipped');
+  log('Unhandled/non-customer status, skip WhatsApp:', {
+    statusId: statusId || null,
+    orderNumber,
+    status
+  });
 }
 
 app.post('/ro/webhook', async (req, res) => {
@@ -1234,11 +1246,6 @@ function defaultTemplateParams(template) {
       'Павел',
       'B4582'
     ],
-    order_status_changed: [
-      'Павел',
-      'B4582',
-      'Готов к выдаче'
-    ],
     order_ready: [
       'Павел',
       'B4582',
@@ -1246,6 +1253,11 @@ function defaultTemplateParams(template) {
     ],
     order_review_request: [
       'Павел'
+    ],
+    order_closed_receipt: [
+      'Павел',
+      'B4582',
+      'https://masterproservis.kz'
     ]
   };
 
@@ -1255,7 +1267,7 @@ function defaultTemplateParams(template) {
 app.get('/test-template', async (req, res) => {
   try {
     const to = normalizePhone(req.query.to || MANAGER_WHATSAPP);
-    const template = String(req.query.template || 'order_status_changed');
+    const template = String(req.query.template || 'order_ready');
 
     const manualParams = [];
 
