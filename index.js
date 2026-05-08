@@ -25,6 +25,13 @@ const CLOSED_STATUS_IDS = parseIdList(process.env.CLOSED_STATUS_IDS || '');
 const ACCEPTED_STATUS_IDS = parseIdList(process.env.ACCEPTED_STATUS_IDS || '');
 const INTERNAL_STATUS_IDS = parseIdList(process.env.INTERNAL_STATUS_IDS || '');
 
+const RECEIPT_TEMPLATE_NAME = process.env.RECEIPT_TEMPLATE_NAME || 'order_closed_receipt';
+const RECEIPT_SEARCH_ENABLED = String(process.env.RECEIPT_SEARCH_ENABLED || 'true').toLowerCase() !== 'false';
+const RECEIPT_RETRY_MS = parseRetryList(process.env.RECEIPT_RETRY_MS || '0,10000,30000,60000,180000,600000');
+
+const receiptJobs = new Set();
+const receiptSent = new Set();
+
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 function log(...args) {
@@ -38,6 +45,13 @@ function parseIdList(value) {
       .map((v) => v.trim())
       .filter(Boolean)
   );
+}
+
+function parseRetryList(value) {
+  return String(value || '')
+    .split(',')
+    .map((v) => Number(String(v).trim()))
+    .filter((v) => Number.isFinite(v) && v >= 0);
 }
 
 function normalizePhone(value) {
@@ -1097,6 +1111,298 @@ function getOrderAmount(payload) {
   return getOrderAmountDebug(payload).formatted;
 }
 
+function extractUrlsFromText(value) {
+  const text = String(value || '');
+  const matches = text.match(/https?:\/\/[^\s"'<>]+/g) || [];
+
+  return matches.map((url) => url.replace(/[),.;]+$/g, ''));
+}
+
+function receiptPathLooksGood(path) {
+  return /receipt|check|cheque|fiscal|fiskal|kofd|ofd|webkassa|web-kassa|cashbox|payment|pay|invoice|bill|document|pdf|qr|чек|касс|фискал|оплат/i.test(path);
+}
+
+function receiptUrlLooksGood(url) {
+  return /cabinet\.kofd\.kz|kofd|ofd|webkassa|receipt|check|cheque|fiscal|pdf|consumer|qr/i.test(String(url || ''));
+}
+
+function scoreReceiptCandidate(candidate) {
+  const url = String(candidate.url || '');
+  const path = String(candidate.path || '');
+
+  if (/cabinet\.kofd\.kz\/consumer/i.test(url)) return 0;
+  if (/kofd/i.test(url)) return 1;
+  if (/webkassa/i.test(url)) return 2;
+  if (/fiscal|receipt|check|cheque/i.test(url)) return 3;
+  if (receiptPathLooksGood(path)) return 4;
+  return 10;
+}
+
+function findReceiptCandidates(obj) {
+  const candidates = [];
+  const seen = new Set();
+
+  function addCandidate(url, path, raw) {
+    if (!url) return;
+
+    const cleanUrl = String(url).replace(/[),.;]+$/g, '');
+
+    if (!/^https?:\/\//i.test(cleanUrl)) return;
+
+    const goodByUrl = receiptUrlLooksGood(cleanUrl);
+    const goodByPath = receiptPathLooksGood(path);
+
+    if (!goodByUrl && !goodByPath) return;
+    if (seen.has(cleanUrl)) return;
+
+    seen.add(cleanUrl);
+
+    candidates.push({
+      url: cleanUrl,
+      path,
+      raw: String(raw || '').slice(0, 500)
+    });
+  }
+
+  function walk(node, path = '', depth = 0) {
+    if (node == null || depth > 14) return;
+
+    if (typeof node === 'string' || typeof node === 'number') {
+      for (const url of extractUrlsFromText(node)) {
+        addCandidate(url, path, node);
+      }
+
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
+      return;
+    }
+
+    if (typeof node === 'object') {
+      for (const [key, value] of Object.entries(node)) {
+        walk(value, path ? `${path}.${key}` : key, depth + 1));
+      }
+    }
+  }
+
+  walk(obj);
+
+  return candidates.sort((a, b) => {
+    const scoreA = scoreReceiptCandidate(a);
+    const scoreB = scoreReceiptCandidate(b);
+
+    if (scoreA !== scoreB) return scoreA - scoreB;
+    return String(a.path).localeCompare(String(b.path));
+  });
+}
+
+async function tryReceiptPath(path, label) {
+  try {
+    const data = await roApiGetRaw(path);
+    log(`RO API receipt ${label} success:`, path);
+    return {
+      path,
+      data
+    };
+  } catch (err) {
+    log(`RO API receipt ${label} failed:`, path, err.status || '', err.message);
+    return null;
+  }
+}
+
+async function findReceiptLink(orderId, baseOrderData = null) {
+  const sources = [];
+
+  if (baseOrderData) {
+    sources.push({
+      path: 'base_ro_api_order',
+      data: baseOrderData
+    });
+  }
+
+  if (orderId) {
+    const paths = [
+      `/orders/${orderId}`,
+      `/orders/${orderId}?include=payments`,
+      `/orders/${orderId}?include=receipts`,
+      `/orders/${orderId}?include=payments,receipts`,
+      `/orders/${orderId}?expand=payments`,
+      `/orders/${orderId}?expand=receipts`,
+      `/orders/${orderId}/payments`,
+      `/orders/${orderId}/payments?include=receipt`,
+      `/orders/${orderId}/payments?include=receipts`,
+      `/orders/${orderId}/payments?expand=receipt`,
+      `/orders/${orderId}/receipts`,
+      `/orders/${orderId}/checks`,
+      `/orders/${orderId}/fiscal`,
+      `/orders/${orderId}/cashbox`,
+      `/orders/${orderId}/documents`,
+      `/orders/${orderId}/invoices`
+    ];
+
+    for (const path of paths) {
+      const source = await tryReceiptPath(path, `order ${orderId}`);
+      if (source) sources.push(source);
+    }
+  }
+
+  const candidates = [];
+
+  for (const source of sources) {
+    const found = findReceiptCandidates(source.data);
+
+    for (const candidate of found) {
+      candidates.push({
+        ...candidate,
+        sourcePath: source.path
+      });
+    }
+  }
+
+  const unique = [];
+  const seen = new Set();
+
+  for (const candidate of candidates) {
+    if (seen.has(candidate.url)) continue;
+    seen.add(candidate.url);
+    unique.push(candidate);
+  }
+
+  unique.sort((a, b) => {
+    const scoreA = scoreReceiptCandidate(a);
+    const scoreB = scoreReceiptCandidate(b);
+
+    if (scoreA !== scoreB) return scoreA - scoreB;
+    return String(a.sourcePath).localeCompare(String(b.sourcePath));
+  });
+
+  return {
+    link: unique[0]?.url || '',
+    candidates: unique,
+    sourcesChecked: sources.map((s) => s.path)
+  };
+}
+
+function scheduleReceiptSearch({ orderId, clientPhone, clientName, orderNumber, baseOrderData }) {
+  if (!RECEIPT_SEARCH_ENABLED) {
+    log('Receipt search disabled by RECEIPT_SEARCH_ENABLED=false');
+    return;
+  }
+
+  if (!orderId) {
+    log('Receipt search skipped: no orderId');
+    return;
+  }
+
+  const key = String(orderId);
+
+  if (receiptSent.has(key)) {
+    log('Receipt already sent, skip:', key);
+    return;
+  }
+
+  if (receiptJobs.has(key)) {
+    log('Receipt search already scheduled, skip:', key);
+    return;
+  }
+
+  receiptJobs.add(key);
+
+  log('Receipt search scheduled:', {
+    orderId: key,
+    orderNumber,
+    retries: RECEIPT_RETRY_MS
+  });
+
+  RECEIPT_RETRY_MS.forEach((ms, index) => {
+    const timer = setTimeout(() => {
+      attemptReceiptSend({
+        orderId: key,
+        clientPhone,
+        clientName,
+        orderNumber,
+        baseOrderData,
+        attempt: index + 1,
+        isLast: index === RECEIPT_RETRY_MS.length - 1
+      }).catch((err) => {
+        console.error('Receipt attempt fatal error:', err.data || err.message || err);
+      });
+    }, ms);
+
+    if (timer.unref) timer.unref();
+  });
+}
+
+async function attemptReceiptSend({ orderId, clientPhone, clientName, orderNumber, baseOrderData, attempt, isLast }) {
+  if (receiptSent.has(orderId)) return;
+
+  log('Receipt search attempt:', {
+    orderId,
+    orderNumber,
+    attempt
+  });
+
+  const result = await findReceiptLink(orderId, baseOrderData);
+
+  if (!result.link) {
+    log('Receipt link not found yet:', {
+      orderId,
+      orderNumber,
+      attempt,
+      candidates: result.candidates.length,
+      sourcesChecked: result.sourcesChecked
+    });
+
+    if (isLast) {
+      receiptJobs.delete(orderId);
+      log('Receipt search finished without link:', {
+        orderId,
+        orderNumber
+      });
+    }
+
+    return;
+  }
+
+  log('Receipt link found:', {
+    orderId,
+    orderNumber,
+    receiptUrl: result.link,
+    attempt
+  });
+
+  try {
+    await sendTemplate(clientPhone, RECEIPT_TEMPLATE_NAME, [
+      clientName,
+      orderNumber,
+      result.link
+    ]);
+
+    receiptSent.add(orderId);
+    receiptJobs.delete(orderId);
+
+    log('order_closed_receipt sent', clientPhone, {
+      clientName,
+      orderNumber,
+      orderId,
+      receiptUrl: result.link
+    });
+  } catch (err) {
+    console.error('order_closed_receipt send error:', err.data || err.message || err);
+
+    if (isLast) {
+      receiptJobs.delete(orderId);
+      log('Receipt link found but template was not sent after last attempt:', {
+        orderId,
+        orderNumber,
+        receiptUrl: result.link
+      });
+    }
+  }
+}
+
 function isLeadCreated(payload) {
   const event = getEventName(payload);
   const objectType = String(pick(payload, ['context.object_type'], '')).toLowerCase();
@@ -1287,7 +1593,10 @@ app.get('/health', (req, res) => {
     readyStatusIds: [...READY_STATUS_IDS],
     closedStatusIds: [...CLOSED_STATUS_IDS],
     acceptedStatusIds: [...ACCEPTED_STATUS_IDS],
-    internalStatusIds: [...INTERNAL_STATUS_IDS]
+    internalStatusIds: [...INTERNAL_STATUS_IDS],
+    receiptTemplateName: RECEIPT_TEMPLATE_NAME,
+    receiptSearchEnabled: RECEIPT_SEARCH_ENABLED,
+    receiptRetryMs: RECEIPT_RETRY_MS
   });
 });
 
@@ -1393,11 +1702,12 @@ async function handleOrderEvent(payload) {
   const status = getOrderStatus(fullPayload);
   const statusId = statusIdBeforeApi || getNewStatusId(fullPayload);
   const amountDebug = getOrderAmountDebug(fullPayload);
+  const orderId = getRoOrderId(payload) || getRoOrderId(fullPayload);
 
   log('Order status debug:', {
     eventName: getEventName(payload),
     statusId: statusId || null,
-    orderId: getRoOrderId(payload) || null,
+    orderId: orderId || null,
     orderNumber,
     clientName,
     status,
@@ -1422,11 +1732,25 @@ async function handleOrderEvent(payload) {
   }
 
   if (isOrderClosed(fullPayload)) {
-    await sendTemplate(clientPhone, 'order_review_request', [
-      clientName
-    ]);
+    scheduleReceiptSearch({
+      orderId,
+      clientPhone,
+      clientName,
+      orderNumber,
+      baseOrderData: fullPayload.ro_api_order
+    });
 
-    return log('order_review_request sent', clientPhone, { clientName, orderNumber, statusId });
+    try {
+      await sendTemplate(clientPhone, 'order_review_request', [
+        clientName
+      ]);
+
+      log('order_review_request sent', clientPhone, { clientName, orderNumber, statusId });
+    } catch (err) {
+      console.error('order_review_request send error:', err.data || err.message || err);
+    }
+
+    return;
   }
 
   if (isOrderAccepted(fullPayload)) {
@@ -1521,7 +1845,7 @@ function defaultTemplateParams(template) {
     order_closed_receipt: [
       'Павел',
       'B4582',
-      'https://masterproservis.kz'
+      'https://cabinet.kofd.kz/consumer?test=1'
     ]
   };
 
@@ -1663,6 +1987,106 @@ app.get('/debug-order-amount', async (req, res) => {
     res.status(500).json({
       ok: false,
       error: err.message,
+      status: err.status,
+      data: err.data
+    });
+  }
+});
+
+app.get('/debug-receipt', async (req, res) => {
+  try {
+    const orderId = String(req.query.orderId || '');
+
+    if (!orderId) {
+      return res.status(400).json({
+        ok: false,
+        error: 'orderId is required'
+      });
+    }
+
+    const order = await fetchRoOrder(orderId);
+    const result = await findReceiptLink(orderId, order);
+
+    res.json({
+      ok: true,
+      orderId,
+      receiptUrl: result.link,
+      candidates: result.candidates,
+      sourcesChecked: result.sourcesChecked
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+      status: err.status,
+      data: err.data
+    });
+  }
+});
+
+app.get('/send-receipt', async (req, res) => {
+  try {
+    const orderId = String(req.query.orderId || '');
+    const forcedTo = normalizePhone(req.query.to || '');
+
+    if (!orderId) {
+      return res.status(400).json({
+        ok: false,
+        error: 'orderId is required'
+      });
+    }
+
+    const order = await fetchRoOrder(orderId);
+    const payloadForOrder = { ro_api_order: order };
+
+    const receipt = await findReceiptLink(orderId, order);
+
+    if (!receipt.link) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Receipt link not found',
+        orderId,
+        candidates: receipt.candidates,
+        sourcesChecked: receipt.sourcesChecked
+      });
+    }
+
+    const clientPhone = forcedTo || findFirstPhone(order);
+
+    if (!clientPhone) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Client phone not found',
+        orderId,
+        receiptUrl: receipt.link
+      });
+    }
+
+    const clientName = getClientName(payloadForOrder);
+    const orderNumber = getOrderNumber(payloadForOrder);
+
+    const data = await sendTemplate(clientPhone, RECEIPT_TEMPLATE_NAME, [
+      clientName,
+      orderNumber,
+      receipt.link
+    ]);
+
+    receiptSent.add(orderId);
+
+    res.json({
+      ok: true,
+      orderId,
+      to: clientPhone,
+      clientName,
+      orderNumber,
+      receiptUrl: receipt.link,
+      data
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+      meta: err.data,
       status: err.status,
       data: err.data
     });
