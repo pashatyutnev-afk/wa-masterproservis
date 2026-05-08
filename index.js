@@ -1214,37 +1214,162 @@ async function tryReceiptPath(path, label) {
 
 async function findReceiptLink(orderId, baseOrderData = null) {
   const sources = [];
+  const checked = [];
+
+  function remember(path, ok, error = '') {
+    checked.push({
+      path,
+      ok,
+      error: String(error || '').slice(0, 300)
+    });
+  }
 
   if (baseOrderData) {
     sources.push({
       path: 'base_ro_api_order',
       data: baseOrderData
     });
+
+    remember('base_ro_api_order', true);
   }
 
-  if (orderId) {
-    const paths = [
-      `/orders/${orderId}`,
-      `/orders/${orderId}?include=payments`,
-      `/orders/${orderId}?include=receipts`,
-      `/orders/${orderId}?include=payments,receipts`,
-      `/orders/${orderId}?expand=payments`,
-      `/orders/${orderId}?expand=receipts`,
-      `/orders/${orderId}/payments`,
-      `/orders/${orderId}/payments?include=receipt`,
-      `/orders/${orderId}/payments?include=receipts`,
-      `/orders/${orderId}/payments?expand=receipt`,
-      `/orders/${orderId}/receipts`,
-      `/orders/${orderId}/checks`,
-      `/orders/${orderId}/fiscal`,
-      `/orders/${orderId}/cashbox`,
-      `/orders/${orderId}/documents`,
-      `/orders/${orderId}/invoices`
-    ];
+  const paths = [
+    // Сам заказ разными способами
+    `/orders/${orderId}`,
+    `/orders/${orderId}?include=payments`,
+    `/orders/${orderId}?include=receipts`,
+    `/orders/${orderId}?include=payments,receipts`,
+    `/orders/${orderId}?include=documents`,
+    `/orders/${orderId}?include=invoices`,
+    `/orders/${orderId}?include=checks`,
+    `/orders/${orderId}?include=fiscal`,
+    `/orders/${orderId}?include=cashbox`,
+    `/orders/${orderId}?include=webkassa`,
+    `/orders/${orderId}?expand=payments`,
+    `/orders/${orderId}?expand=receipts`,
+    `/orders/${orderId}?expand=documents`,
+    `/orders/${orderId}?expand=invoices`,
+    `/orders/${orderId}?expand=checks`,
+    `/orders/${orderId}?expand=fiscal`,
+    `/orders/${orderId}?expand=cashbox`,
+    `/orders/${orderId}?expand=webkassa`,
 
-    for (const path of paths) {
-      const source = await tryReceiptPath(path, `order ${orderId}`);
-      if (source) sources.push(source);
+    // Вложенные сущности заказа
+    `/orders/${orderId}/payments`,
+    `/orders/${orderId}/payments?include=receipt`,
+    `/orders/${orderId}/payments?include=receipts`,
+    `/orders/${orderId}/payments?include=check`,
+    `/orders/${orderId}/payments?include=checks`,
+    `/orders/${orderId}/payments?include=fiscal`,
+    `/orders/${orderId}/payments?include=webkassa`,
+    `/orders/${orderId}/payments?expand=receipt`,
+    `/orders/${orderId}/payments?expand=receipts`,
+    `/orders/${orderId}/payments?expand=check`,
+    `/orders/${orderId}/payments?expand=checks`,
+    `/orders/${orderId}/payments?expand=fiscal`,
+    `/orders/${orderId}/payments?expand=webkassa`,
+    `/orders/${orderId}/transactions`,
+    `/orders/${orderId}/cashbox-transactions`,
+    `/orders/${orderId}/cashbox_transactions`,
+    `/orders/${orderId}/receipts`,
+    `/orders/${orderId}/receipt`,
+    `/orders/${orderId}/checks`,
+    `/orders/${orderId}/check`,
+    `/orders/${orderId}/fiscal`,
+    `/orders/${orderId}/fiscal-receipts`,
+    `/orders/${orderId}/fiscal_receipts`,
+    `/orders/${orderId}/cashbox`,
+    `/orders/${orderId}/documents`,
+    `/orders/${orderId}/invoices`,
+    `/orders/${orderId}/invoice`,
+    `/orders/${orderId}/public-url`,
+    `/orders/${orderId}/public_url`,
+    `/orders/${orderId}/public`,
+
+    // Глобальные платежи / касса по order_id
+    `/payments?order_id=${orderId}`,
+    `/payments?orderId=${orderId}`,
+    `/payments?order=${orderId}`,
+    `/payments?filter[order_id]=${orderId}`,
+    `/payments?filter[orderId]=${orderId}`,
+    `/payments?include=receipt&order_id=${orderId}`,
+    `/payments?include=receipts&order_id=${orderId}`,
+    `/payments?include=check&order_id=${orderId}`,
+    `/payments?include=checks&order_id=${orderId}`,
+    `/payments?include=fiscal&order_id=${orderId}`,
+    `/payments?include=webkassa&order_id=${orderId}`,
+    `/payments?expand=receipt&order_id=${orderId}`,
+    `/payments?expand=receipts&order_id=${orderId}`,
+    `/payments?expand=check&order_id=${orderId}`,
+    `/payments?expand=checks&order_id=${orderId}`,
+    `/payments?expand=fiscal&order_id=${orderId}`,
+    `/payments?expand=webkassa&order_id=${orderId}`,
+
+    // Cashbox варианты
+    `/cashbox?order_id=${orderId}`,
+    `/cashbox?orderId=${orderId}`,
+    `/cashboxes?order_id=${orderId}`,
+    `/cashboxes?orderId=${orderId}`,
+    `/cashbox/transactions?order_id=${orderId}`,
+    `/cashbox/transactions?orderId=${orderId}`,
+    `/cashbox-transactions?order_id=${orderId}`,
+    `/cashbox-transactions?orderId=${orderId}`,
+    `/cashbox_transactions?order_id=${orderId}`,
+    `/cashbox_transactions?orderId=${orderId}`,
+    `/cashbox_transactions?filter[order_id]=${orderId}`,
+    `/cashbox-transactions?filter[order_id]=${orderId}`,
+    `/transactions?order_id=${orderId}`,
+    `/transactions?orderId=${orderId}`,
+    `/transactions?filter[order_id]=${orderId}`,
+
+    // Документы / инвойсы / чеки глобально
+    `/documents?order_id=${orderId}`,
+    `/documents?orderId=${orderId}`,
+    `/documents?filter[order_id]=${orderId}`,
+    `/invoices?order_id=${orderId}`,
+    `/invoices?orderId=${orderId}`,
+    `/invoices?filter[order_id]=${orderId}`,
+    `/receipts?order_id=${orderId}`,
+    `/receipts?orderId=${orderId}`,
+    `/receipts?filter[order_id]=${orderId}`,
+    `/checks?order_id=${orderId}`,
+    `/checks?orderId=${orderId}`,
+    `/checks?filter[order_id]=${orderId}`,
+    `/fiscal?order_id=${orderId}`,
+    `/fiscal?orderId=${orderId}`,
+    `/fiscal-receipts?order_id=${orderId}`,
+    `/fiscal-receipts?orderId=${orderId}`,
+    `/fiscal_receipts?order_id=${orderId}`,
+    `/fiscal_receipts?orderId=${orderId}`,
+
+    // Webkassa / OFD варианты
+    `/webkassa?order_id=${orderId}`,
+    `/webkassa?orderId=${orderId}`,
+    `/webkassa/receipts?order_id=${orderId}`,
+    `/webkassa/receipts?orderId=${orderId}`,
+    `/webkassa/checks?order_id=${orderId}`,
+    `/webkassa/checks?orderId=${orderId}`,
+    `/ofd?order_id=${orderId}`,
+    `/ofd?orderId=${orderId}`,
+    `/kofd?order_id=${orderId}`,
+    `/kofd?orderId=${orderId}`
+  ];
+
+  for (const path of paths) {
+    try {
+      const data = await roApiGetRaw(path);
+
+      remember(path, true);
+
+      sources.push({
+        path,
+        data
+      });
+
+      log('RO API receipt source success:', path);
+    } catch (err) {
+      remember(path, false, `${err.status || ''} ${err.message || ''}`);
+      log('RO API receipt source failed:', path, err.status || '', err.message);
     }
   }
 
@@ -1266,6 +1391,7 @@ async function findReceiptLink(orderId, baseOrderData = null) {
 
   for (const candidate of candidates) {
     if (seen.has(candidate.url)) continue;
+
     seen.add(candidate.url);
     unique.push(candidate);
   }
@@ -1281,7 +1407,7 @@ async function findReceiptLink(orderId, baseOrderData = null) {
   return {
     link: unique[0]?.url || '',
     candidates: unique,
-    sourcesChecked: sources.map((s) => s.path)
+    sourcesChecked: checked
   };
 }
 
