@@ -1352,6 +1352,8 @@ async function sendRepairRequestAlert({ clientName, clientPhone, subject }) {
 }
 
 async function handleSiteRepairRequest(payload) {
+  log('Site repair request raw payload:', compactPayloadPreview(payload));
+
   const clientName = getSiteClientName(payload);
   const clientPhone = findFirstPhone(payload);
   const subject = getSiteRepairSubject(payload);
