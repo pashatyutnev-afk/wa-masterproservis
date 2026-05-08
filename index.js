@@ -2,8 +2,8 @@ import express from 'express';
 
 const app = express();
 
-app.use(express.json({ limit: '3mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
 const PORT = Number(process.env.PORT || 3000);
 
@@ -29,10 +29,10 @@ const RECEIPT_TEMPLATE_NAME = process.env.RECEIPT_TEMPLATE_NAME || 'order_closed
 const RECEIPT_SEARCH_ENABLED = String(process.env.RECEIPT_SEARCH_ENABLED || 'true').toLowerCase() !== 'false';
 const RECEIPT_RETRY_MS = parseRetryList(process.env.RECEIPT_RETRY_MS || '0,10000,30000,60000,180000,600000');
 
+const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+
 const receiptJobs = new Set();
 const receiptSent = new Set();
-
-const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -68,6 +68,11 @@ function normalizePhone(value) {
   }
 
   return digits;
+}
+
+function prettyPhone(value) {
+  const phone = normalizePhone(value);
+  return phone ? `+${phone}` : 'не указан';
 }
 
 function pick(obj, paths, fallback = '') {
@@ -117,6 +122,7 @@ function cleanClientName(value) {
   if (!text) return '';
   if (looksLikePhone(text)) return '';
   if (looksLikeOrderNumber(text)) return '';
+  if (/^(заявка|форма|обращение|новое обращение)$/i.test(text)) return '';
 
   return text;
 }
@@ -135,7 +141,6 @@ function findFirstPhone(obj) {
   const direct = pick(obj, [
     'client.phone',
     'client.mobile',
-    'client.telephone',
     'client.phone_number',
     'client.phoneNumber',
     'client.whatsapp',
@@ -144,25 +149,28 @@ function findFirstPhone(obj) {
     'client.phones.0.number',
     'client.phones.0.value',
 
-    'data.client.phone',
-    'data.client.mobile',
-    'data.client.phone_number',
-    'data.client.phone.0',
-    'data.client.phones.0.phone',
-    'data.client.phones.0.number',
-    'data.client.phones.0.value',
-
     'metadata.client.phone',
     'metadata.client.mobile',
     'metadata.client.phone_number',
+    'metadata.client.phoneNumber',
     'metadata.client.phone.0',
     'metadata.client.phones.0.phone',
     'metadata.client.phones.0.number',
     'metadata.client.phones.0.value',
 
+    'data.client.phone',
+    'data.client.mobile',
+    'data.client.phone_number',
+    'data.client.phoneNumber',
+    'data.client.phone.0',
+    'data.client.phones.0.phone',
+    'data.client.phones.0.number',
+    'data.client.phones.0.value',
+
     'order.client.phone',
     'order.client.mobile',
     'order.client.phone_number',
+    'order.client.phoneNumber',
     'order.client.phone.0',
     'order.client.phones.0.phone',
     'order.client.phones.0.number',
@@ -171,6 +179,7 @@ function findFirstPhone(obj) {
     'ro_api_order.client.phone',
     'ro_api_order.client.mobile',
     'ro_api_order.client.phone_number',
+    'ro_api_order.client.phoneNumber',
     'ro_api_order.client.phone.0',
     'ro_api_order.client.phones.0.phone',
     'ro_api_order.client.phones.0.number',
@@ -179,19 +188,11 @@ function findFirstPhone(obj) {
     'ro_api_order.data.client.phone',
     'ro_api_order.data.client.mobile',
     'ro_api_order.data.client.phone_number',
+    'ro_api_order.data.client.phoneNumber',
     'ro_api_order.data.client.phone.0',
     'ro_api_order.data.client.phones.0.phone',
     'ro_api_order.data.client.phones.0.number',
     'ro_api_order.data.client.phones.0.value',
-
-    'ro_api_client.phone.0',
-    'ro_api_client.phone',
-    'ro_api_client.mobile',
-    'ro_api_client.phone_number',
-    'ro_api_client.phoneNumber',
-    'ro_api_client.phones.0.phone',
-    'ro_api_client.phones.0.number',
-    'ro_api_client.phones.0.value',
 
     'phone',
     'mobile',
@@ -213,8 +214,8 @@ function findFirstPhone(obj) {
     if (node == null || depth > 14) return;
 
     if (typeof node === 'string' || typeof node === 'number') {
-      const keyLooksPhone = /phone|mobile|tel|contact|whatsapp|wa|номер|телефон/i.test(path);
       const found = looksLikePhone(node);
+      const keyLooksPhone = /phone|mobile|tel|contact|whatsapp|wa|номер|телефон|домашний/i.test(path);
 
       if (found && (keyLooksPhone || found.length === 11)) {
         if (!seen.has(found)) {
@@ -227,25 +228,20 @@ function findFirstPhone(obj) {
     }
 
     if (Array.isArray(node)) {
-      node.forEach((v, i) => walk(v, `${path}.${i}`, depth + 1));
+      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
       return;
     }
 
     if (typeof node === 'object') {
-      for (const [k, v] of Object.entries(node)) {
-        walk(v, path ? `${path}.${k}` : k, depth + 1);
+      for (const [key, value] of Object.entries(node)) {
+        walk(value, path ? `${path}.${key}` : key, depth + 1);
       }
     }
   }
 
   walk(obj);
 
-  if (candidates.length) return candidates[0];
-
-  const text = JSON.stringify(obj || {});
-  const match = text.match(/(?:\+?7|8)[\s\-()]*\d{3}[\s\-()]*\d{3}[\s\-()]*\d{2}[\s\-()]*\d{2}|\b7\d{10}\b|\b8\d{10}\b/);
-
-  return match ? normalizePhone(match[0]) : '';
+  return candidates[0] || '';
 }
 
 function findFirstId(obj, paths) {
@@ -275,16 +271,15 @@ function getRoOrderId(payload) {
 
 function getRoLeadId(payload) {
   return findFirstId(payload, [
-    'lead.id',
     'metadata.lead.id',
+    'lead.id',
     'data.lead.id',
     'context.lead.id',
     'metadata.lead_id',
     'object.id',
     'object_id',
     'context.object_id',
-    'data.object_id',
-    'ro_api_lead.id'
+    'data.object_id'
   ]);
 }
 
@@ -300,17 +295,10 @@ function getRoClientId(payload) {
     'data.order.client.id',
     'context.client.id',
     'metadata.client_id',
-
-    'lead.client.id',
-    'metadata.lead.client.id',
-    'ro_api_lead.client.id',
-    'ro_api_lead.client_id',
-
     'ro_api_order.client.id',
     'ro_api_order.client_id',
     'ro_api_order.data.client.id',
-    'ro_api_order.data.client_id',
-    'ro_api_client.id'
+    'ro_api_order.data.client_id'
   ]);
 }
 
@@ -331,9 +319,24 @@ function getNewStatusId(payload) {
   ], '')).trim();
 }
 
+function getEventName(payload) {
+  return String(pick(payload, [
+    'event',
+    'event_name',
+    'type',
+    'action',
+    'topic',
+    'hook',
+    'webhook_event',
+    'data.event',
+    'data.type',
+    'object.event'
+  ], '')).toLowerCase();
+}
+
 function compactPayloadPreview(payload) {
   try {
-    return JSON.stringify(payload).slice(0, 16000);
+    return JSON.stringify(payload).slice(0, 12000);
   } catch {
     return '[payload stringify failed]';
   }
@@ -342,7 +345,7 @@ function compactPayloadPreview(payload) {
 function unwrapRoResponse(data) {
   if (!data || typeof data !== 'object') return data;
 
-  if (data.data && typeof data.data === 'object') return data.data;
+  if (data.data && typeof data.data === 'object' && !Array.isArray(data.data)) return data.data;
   if (data.result && typeof data.result === 'object') return data.result;
   if (data.item && typeof data.item === 'object') return data.item;
 
@@ -418,319 +421,21 @@ async function fetchRoOrder(orderId) {
   ], `order ${orderId}`, { raw: true });
 }
 
-async function fetchRoLead(leadId) {
-  if (!leadId) return null;
-
-  return tryRoApiPaths([
-    `/leads/${leadId}`,
-    `/leads/${leadId}?include=client`,
-    `/leads/${leadId}?expand=client`,
-    `/leads/${leadId}?with=client`,
-    `/appeals/${leadId}`,
-    `/appeals/${leadId}?include=client`,
-    `/requests/${leadId}`,
-    `/requests/${leadId}?include=client`
-  ], `lead ${leadId}`);
-}
-
-async function fetchRoClient(clientId) {
-  if (!clientId) return null;
-
-  return tryRoApiPaths([
-    `/clients/${clientId}`,
-    `/clients/${clientId}?include=phones`,
-    `/clients/${clientId}?expand=phones`,
-    `/contacts/${clientId}`,
-    `/clients?ids[]=${clientId}`
-  ], `client ${clientId}`);
-}
-function asRoArray(data) {
-  const buckets = [
-    data,
-    data?.data,
-    data?.result,
-    data?.items,
-    data?.rows,
-    data?.leads,
-    data?.clients,
-    data?.data?.data,
-    data?.data?.items,
-    data?.data?.rows,
-    data?.result?.data,
-    data?.result?.items,
-    data?.result?.rows
-  ];
-
-  for (const bucket of buckets) {
-    if (Array.isArray(bucket)) return bucket;
-  }
-
-  if (data && typeof data === 'object') return [data];
-
-  return [];
-}
-
-function normalizeCompareText(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/ё/g, 'е')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function getObjectName(obj) {
-  return String(pick(obj, [
-    'fullname',
-    'full_name',
-    'name',
-    'first_name',
-    'client.fullname',
-    'client.full_name',
-    'client.name',
-    'client.first_name',
-    'data.fullname',
-    'data.full_name',
-    'data.name',
-    'data.first_name',
-    'data.client.fullname',
-    'data.client.full_name',
-    'data.client.name',
-    'data.client.first_name'
-  ], '')).trim();
-}
-
-function getLeadClientName(payload) {
-  return titleCaseName(pick(payload, [
-    'metadata.client.fullname',
-    'metadata.client.full_name',
-    'metadata.client.name',
-    'metadata.client.first_name',
-
-    'client.fullname',
-    'client.full_name',
-    'client.name',
-    'client.first_name',
-
-    'data.client.fullname',
-    'data.client.full_name',
-    'data.client.name',
-    'data.client.first_name',
-
-    'ro_api_lead.client.fullname',
-    'ro_api_lead.client.full_name',
-    'ro_api_lead.client.name',
-    'ro_api_lead.client.first_name',
-    'ro_api_lead.data.client.fullname',
-    'ro_api_lead.data.client.full_name',
-    'ro_api_lead.data.client.name',
-    'ro_api_lead.data.client.first_name'
-  ], ''));
-}
-
-function pickBestClientByName(data, wantedName) {
-  const wanted = normalizeCompareText(wantedName);
-  const list = asRoArray(data).filter((item) => item && typeof item === 'object');
-
-  if (!list.length) return null;
-
-  const withPhones = list.filter((item) => findFirstPhone(item));
-
-  if (!wanted) {
-    return withPhones[0] || list[0] || null;
-  }
-
-  const exact = withPhones.find((item) => normalizeCompareText(getObjectName(item)) === wanted);
-  if (exact) return exact;
-
-  const contains = withPhones.find((item) => {
-    const name = normalizeCompareText(getObjectName(item));
-    return name && (name.includes(wanted) || wanted.includes(name));
-  });
-
-  if (contains) return contains;
-
-  return withPhones[0] || list[0] || null;
-}
-
-async function searchRoClientByName(clientName) {
-  const name = String(clientName || '').trim();
-  if (!name) return null;
-
-  const q = encodeURIComponent(name);
-
-  const paths = [
-    `/clients?query=${q}`,
-    `/clients?search=${q}`,
-    `/clients?name=${q}`,
-    `/clients?fullname=${q}`,
-    `/clients?full_name=${q}`,
-    `/clients?filter[name]=${q}`,
-    `/clients?filter[fullname]=${q}`,
-    `/clients?filter[full_name]=${q}`,
-    `/contacts?query=${q}`,
-    `/contacts?search=${q}`,
-    `/contacts?name=${q}`,
-    `/contacts?fullname=${q}`
-  ];
-
-  let lastErr = null;
-
-  for (const path of paths) {
-    try {
-      const data = await roApiGetRaw(path);
-      const client = pickBestClientByName(data, name);
-
-      if (client && findFirstPhone(client)) {
-        log('RO API client search success:', path);
-        return {
-          client,
-          path
-        };
-      }
-
-      log('RO API client search empty/no phone:', path);
-    } catch (err) {
-      lastErr = err;
-      log('RO API client search failed:', path, err.status || '', err.message);
-    }
-  }
-
-  if (lastErr) {
-    log('RO API client search failed finally:', lastErr.status || '', lastErr.message);
-  }
-
-  return null;
-}
-
-function pickLeadFromListResponse(data, leadId) {
-  const id = String(leadId || '');
-  const list = asRoArray(data).filter((item) => item && typeof item === 'object');
-
-  if (!list.length) return null;
-
-  const exact = list.find((item) => {
-    const itemId = String(pick(item, [
-      'id',
-      'lead_id',
-      'object_id',
-      'data.id',
-      'data.lead_id',
-      'data.object_id'
-    ], ''));
-
-    return itemId === id;
-  });
-
-  if (exact) return exact;
-
-  if (list.length === 1) return list[0];
-
-  return null;
-}
-
-function extractRepairSubjectFromText(value) {
-  const text = String(value || '').trim();
-  if (!text) return '';
-
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const device = lines.find((line) => /^Тип устройства\s*:/i.test(line));
-  const problem = lines.find((line) => /^Неисправность\s*:/i.test(line));
-  const comment = lines.find((line) => /^Комментарий\s*:/i.test(line));
-
-  const useful = [device, problem, comment].filter(Boolean);
-
-  if (useful.length) {
-    return useful.join('\n');
-  }
-
-  const cleaned = lines
-    .filter((line) => !/^Форма\s*:/i.test(line))
-    .filter((line) => !/^FormID\s*:/i.test(line))
-    .filter((line) => !/^Страница\s*:/i.test(line))
-    .filter((line) => !/^Прикрепить фото\s*:/i.test(line))
-    .join('\n')
-    .trim();
-
-  return cleaned || text;
-}
-
-function findFormTextInPayload(obj) {
-  const candidates = [];
-
-  function walk(node, path = '', depth = 0) {
-    if (node == null || depth > 12) return;
-
-    if (typeof node === 'string' || typeof node === 'number') {
-      const text = String(node || '').trim();
-
-      if (
-        text &&
-        (
-          /Тип устройства\s*:/i.test(text) ||
-          /Неисправность\s*:/i.test(text) ||
-          /Комментарий\s*:/i.test(text) ||
-          /FormID\s*:/i.test(text)
-        )
-      ) {
-        candidates.push({
-          path,
-          text
-        });
-      }
-
-      return;
-    }
-
-    if (Array.isArray(node)) {
-      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
-      return;
-    }
-
-    if (typeof node === 'object') {
-      for (const [key, value] of Object.entries(node)) {
-        walk(value, path ? `${path}.${key}` : key, depth + 1);
-      }
-    }
-  }
-
-  walk(obj);
-
-  candidates.sort((a, b) => {
-    const score = (item) => {
-      let s = 0;
-      if (/comment|description|message|text|notes|коммент/i.test(item.path)) s -= 10;
-      if (/Тип устройства\s*:/i.test(item.text)) s -= 5;
-      if (/Неисправность\s*:/i.test(item.text)) s -= 5;
-      if (/Комментарий\s*:/i.test(item.text)) s -= 5;
-      return s;
-    };
-
-    return score(a) - score(b);
-  });
-
-  return candidates[0]?.text || '';
-}
 async function fetchRoOrderPublicUrl(orderId) {
   if (!orderId) return null;
-
   return roApiGetRaw(`/orders/${orderId}/public-url`);
 }
 
 async function enrichRoOrderPayloadWithApi(payload) {
   const orderId = getRoOrderId(payload);
-  const clientIdFromPayload = getRoClientId(payload);
+  const clientId = getRoClientId(payload);
 
   log('Order webhook: trying RO API first.', {
     orderId: orderId || null,
-    clientId: clientIdFromPayload || null
+    clientId: clientId || null
   });
 
   let orderData = null;
-  let clientData = null;
 
   if (orderId) {
     try {
@@ -749,179 +454,52 @@ async function enrichRoOrderPayloadWithApi(payload) {
     }
   }
 
-  const clientId =
-    clientIdFromPayload ||
-    getRoClientId(orderData || {}) ||
-    findFirstId(orderData || {}, [
-      'client.id',
-      'customer.id',
-      'data.client.id',
-      'order.client.id',
-      'client_id',
-      'customer_id'
-    ]);
-
-  if (clientId) {
-    try {
-      clientData = await fetchRoClient(clientId);
-      const phoneFromClient = findFirstPhone(clientData);
-
-      if (phoneFromClient) {
-        return {
-          payload: { ...payload, ro_api_order: orderData, ro_api_client: clientData },
-          phone: phoneFromClient,
-          source: 'ro_api_client'
-        };
-      }
-    } catch (err) {
-      log('RO API client lookup failed finally:', err.status || '', err.message);
-    }
-  }
-
   const fallbackPhone = findFirstPhone(payload);
 
   if (fallbackPhone) {
     log('WARNING: RO API phone not found, fallback to webhook phone:', fallbackPhone);
 
     return {
-      payload: { ...payload, ro_api_order: orderData, ro_api_client: clientData },
+      payload: { ...payload, ro_api_order: orderData },
       phone: fallbackPhone,
       source: 'webhook_fallback'
     };
   }
 
   return {
-    payload: { ...payload, ro_api_order: orderData, ro_api_client: clientData },
+    payload: { ...payload, ro_api_order: orderData },
     phone: '',
     source: 'not_found'
   };
-}
-
-async function enrichRoLeadPayloadWithApi(payload) {
-  const originalPhone = findFirstPhone(payload);
-
-  if (originalPhone) {
-    return {
-      payload,
-      phone: originalPhone,
-      source: 'webhook'
-    };
-  }
-
-  const leadId = getRoLeadId(payload);
-  const clientIdFromPayload = getRoClientId(payload);
-
-  log('No phone in lead webhook payload. Trying RO API.', {
-    leadId: leadId || null,
-    clientId: clientIdFromPayload || null
-  });
-
-  let leadData = null;
-  let clientData = null;
-
-  if (leadId) {
-    try {
-      leadData = await fetchRoLead(leadId);
-      const phoneFromLead = findFirstPhone(leadData);
-
-      if (phoneFromLead) {
-        return {
-          payload: { ...payload, ro_api_lead: leadData },
-          phone: phoneFromLead,
-          source: 'ro_api_lead'
-        };
-      }
-    } catch (err) {
-      log('RO API lead lookup failed finally:', err.status || '', err.message);
-    }
-  }
-
-  const clientId =
-    clientIdFromPayload ||
-    getRoClientId(leadData || {}) ||
-    findFirstId(leadData || {}, [
-      'client.id',
-      'customer.id',
-      'client_id',
-      'customer_id',
-      'id'
-    ]);
-
-  if (clientId) {
-    try {
-      clientData = await fetchRoClient(clientId);
-      const phoneFromClient = findFirstPhone(clientData);
-
-      if (phoneFromClient) {
-        return {
-          payload: { ...payload, ro_api_lead: leadData, ro_api_client: clientData },
-          phone: phoneFromClient,
-          source: 'ro_api_client'
-        };
-      }
-    } catch (err) {
-      log('RO API client lookup failed finally:', err.status || '', err.message);
-    }
-  }
-
-  return {
-    payload: { ...payload, ro_api_lead: leadData, ro_api_client: clientData },
-    phone: '',
-    source: 'not_found'
-  };
-}
-
-function getEventName(payload) {
-  return String(pick(payload, [
-    'event',
-    'event_name',
-    'type',
-    'action',
-    'topic',
-    'hook',
-    'webhook_event',
-    'data.event',
-    'data.type',
-    'object.event'
-  ], '')).toLowerCase();
 }
 
 function getClientName(payload) {
   const firstName = pick(payload, [
-    'ro_api_client.first_name',
-    'ro_api_order.first_name',
-    'ro_api_order.data.first_name',
     'ro_api_order.client.first_name',
     'ro_api_order.data.client.first_name',
-    'ro_api_lead.client.first_name',
+    'ro_api_order.first_name',
+    'ro_api_order.data.first_name',
 
     'metadata.client.first_name',
     'client.first_name',
+    'data.client.first_name',
     'metadata.order.client.first_name',
     'order.client.first_name'
   ], '');
 
   const fullName = pick(payload, [
-    'ro_api_client.name',
-    'ro_api_client.fullname',
-    'ro_api_client.full_name',
-
-    'ro_api_order.name',
-    'ro_api_order.fullname',
-    'ro_api_order.full_name',
-    'ro_api_order.data.name',
-    'ro_api_order.data.fullname',
-    'ro_api_order.data.full_name',
     'ro_api_order.client.name',
     'ro_api_order.client.fullname',
     'ro_api_order.client.full_name',
     'ro_api_order.data.client.name',
     'ro_api_order.data.client.fullname',
     'ro_api_order.data.client.full_name',
-
-    'ro_api_lead.client.name',
-    'ro_api_lead.client.fullname',
-    'ro_api_lead.client.full_name',
+    'ro_api_order.name',
+    'ro_api_order.fullname',
+    'ro_api_order.full_name',
+    'ro_api_order.data.name',
+    'ro_api_order.data.fullname',
+    'ro_api_order.data.full_name',
 
     'metadata.client.fullname',
     'metadata.client.full_name',
@@ -929,24 +507,11 @@ function getClientName(payload) {
     'client.fullname',
     'client.full_name',
     'client.name',
-
-    'metadata.order.client.fullname',
-    'metadata.order.client.full_name',
-    'metadata.order.client.name',
-    'order.client.fullname',
-    'order.client.full_name',
-    'order.client.name',
-
+    'data.client.fullname',
+    'data.client.full_name',
+    'data.client.name',
     'customer.fullname',
     'customer.name',
-    'lead.name',
-    'metadata.lead.client.fullname',
-    'metadata.lead.client.name',
-    'appeal.name',
-    'data.client.fullname',
-    'data.client.name',
-    'data.customer.name',
-    'contact.name',
     'client_name',
     'customer_name',
     'name'
@@ -955,85 +520,24 @@ function getClientName(payload) {
   return titleCaseName(firstName) || titleCaseName(fullName) || 'Клиент';
 }
 
-function getRepairSubject(payload) {
-  const rawSubject = String(pick(payload, [
-    'comment',
-    'description',
-    'message',
-    'problem',
-    'text',
-
-    'lead.comment',
-    'lead.description',
-    'lead.text',
-    'lead.message',
-
-    'metadata.lead.comment',
-    'metadata.lead.description',
-    'metadata.lead.text',
-    'metadata.lead.message',
-
-    'appeal.comment',
-    'appeal.description',
-    'appeal.text',
-    'appeal.message',
-
-    'request.comment',
-    'request.description',
-    'request.text',
-    'request.message',
-
-    'data.comment',
-    'data.description',
-    'data.message',
-    'data.text',
-
-    'ro_api_lead.comment',
-    'ro_api_lead.description',
-    'ro_api_lead.text',
-    'ro_api_lead.message',
-
-    'ro_api_order.comment',
-    'ro_api_order.description',
-    'ro_api_order.manager_notes',
-    'ro_api_order.engineer_notes'
-  ], '')).trim();
-
-  if (rawSubject) return rawSubject;
-
-  const leadName = String(pick(payload, [
-    'lead.name',
-    'metadata.lead.name',
-    'data.lead.name',
-    'ro_api_lead.name'
-  ], '')).trim();
-
-  // РемОнлайн иногда присылает сюда просто номер обращения: "21".
-  // Это не описание заявки, поэтому клиенту/менеджеру его не показываем как "Что нужно".
-  if (leadName && !/^\d+$/.test(leadName)) {
-    return leadName;
-  }
-
-  return 'Комментарий';
-}
-
 function getOrderNumber(payload) {
   return String(pick(payload, [
     'metadata.order.name',
     'order.name',
     'data.order.name',
-    'ro_api_order.order.name',
-    'ro_api_order.data.order.name',
+
     'ro_api_order.number',
     'ro_api_order.data.number',
     'ro_api_order.name',
     'ro_api_order.data.name',
+    'ro_api_order.order.number',
+    'ro_api_order.order.name',
+    'ro_api_order.data.order.number',
+    'ro_api_order.data.order.name',
 
     'metadata.order.number',
     'order.number',
     'data.order.number',
-    'ro_api_order.order.number',
-    'ro_api_order.data.order.number',
 
     'metadata.order.id',
     'order.id',
@@ -1042,8 +546,6 @@ function getOrderNumber(payload) {
     'id',
     'data.order.id',
     'data.id',
-    'ro_api_order.order.id',
-    'ro_api_order.data.order.id',
     'ro_api_order.id',
     'ro_api_order.data.id'
   ], 'Без номера')).trim();
@@ -1103,11 +605,13 @@ function parseMoneyValue(value) {
 
   const num = Number(normalized);
   if (!Number.isFinite(num)) return null;
+
   return num;
 }
 
 function formatMoney(num) {
   if (num === null || num === undefined || !Number.isFinite(num)) return '';
+
   const rounded = Math.round(num * 100) / 100;
 
   if (Math.abs(rounded - Math.round(rounded)) < 0.001) {
@@ -1172,7 +676,7 @@ function getOrderAmountDebug(payload) {
     }
   }
 
-  const best = candidates.find((c) => c.value > 0) || candidates[0];
+  const best = candidates.find((item) => item.value > 0) || candidates[0];
 
   if (best) {
     return {
@@ -1191,10 +695,6 @@ function getOrderAmountDebug(payload) {
     raw: null,
     candidates
   };
-}
-
-function getOrderAmount(payload) {
-  return getOrderAmountDebug(payload).formatted;
 }
 
 function extractUrlsFromText(value) {
@@ -1563,6 +1063,349 @@ function isOrderRelatedPayload(payload) {
   );
 }
 
+function collectFormFields(obj) {
+  const fields = [];
+
+  function primitive(value) {
+    return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+  }
+
+  function add(label, value, path) {
+    if (value === undefined || value === null) return;
+
+    const text = String(value).trim();
+    if (!text) return;
+
+    fields.push({
+      label: String(label || '').trim(),
+      value: text,
+      path: String(path || '').trim()
+    });
+  }
+
+  function walk(node, path = '', depth = 0) {
+    if (node == null || depth > 12) return;
+
+    if (primitive(node)) {
+      const last = path.split('.').pop() || path;
+      add(last, node, path);
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
+      return;
+    }
+
+    if (typeof node === 'object') {
+      const label = pick(node, [
+        'label',
+        'name',
+        'title',
+        'key',
+        'field',
+        'question',
+        'caption'
+      ], '');
+
+      const value = pick(node, [
+        'value',
+        'text',
+        'answer',
+        'content',
+        'val'
+      ], '');
+
+      if (label && value) {
+        add(label, value, path);
+      }
+
+      for (const [key, val] of Object.entries(node)) {
+        walk(val, path ? `${path}.${key}` : key, depth + 1);
+      }
+    }
+  }
+
+  walk(obj);
+
+  return fields;
+}
+
+function findFieldValue(payload, regexList) {
+  const fields = collectFormFields(payload);
+
+  for (const regex of regexList) {
+    const found = fields.find((field) => {
+      const haystack = `${field.label} ${field.path}`;
+      return regex.test(haystack);
+    });
+
+    if (found?.value) return found.value;
+  }
+
+  return '';
+}
+
+function findFormTextInPayload(payload) {
+  const fields = collectFormFields(payload);
+
+  const found = fields.find((field) => (
+    /Тип устройства\s*:/i.test(field.value) ||
+    /Неисправность\s*:/i.test(field.value) ||
+    /Комментарий\s*:/i.test(field.value) ||
+    /FormID\s*:/i.test(field.value)
+  ));
+
+  return found?.value || '';
+}
+
+function extractRepairSubjectFromText(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const device = lines.find((line) => /^Тип устройства\s*:/i.test(line));
+  const problem = lines.find((line) => /^Неисправность\s*:/i.test(line));
+  const comment = lines.find((line) => /^Комментарий\s*:/i.test(line));
+
+  const useful = [device, problem, comment].filter(Boolean);
+
+  if (useful.length) {
+    return useful.join('\n');
+  }
+
+  const cleaned = lines
+    .filter((line) => !/^Форма\s*:/i.test(line))
+    .filter((line) => !/^FormID\s*:/i.test(line))
+    .filter((line) => !/^Страница\s*:/i.test(line))
+    .filter((line) => !/^Прикрепить фото\s*:/i.test(line))
+    .join('\n')
+    .trim();
+
+  return cleaned || text;
+}
+
+function getSiteClientName(payload) {
+  const direct = pick(payload, [
+    'name',
+    'clientName',
+    'client_name',
+    'fullname',
+    'full_name',
+    'first_name',
+    'client.name',
+    'client.fullname',
+    'client.full_name',
+    'data.name',
+    'data.clientName',
+    'data.client_name',
+    'fields.name',
+    'fields.clientName'
+  ], '');
+
+  const fromField = findFieldValue(payload, [
+    /(^|\.|\s)(имя|ваше имя|клиент|client_name|clientName|fullname|full_name)($|\.|\s)/i
+  ]);
+
+  return titleCaseName(direct) || titleCaseName(fromField) || 'Клиент';
+}
+
+function getSiteRepairSubject(payload) {
+  const formText = findFormTextInPayload(payload);
+
+  if (formText) {
+    const extracted = extractRepairSubjectFromText(formText);
+    if (extracted) return extracted;
+  }
+
+  const device = findFieldValue(payload, [
+    /тип.*устрой/i,
+    /устройство/i,
+    /инструмент/i,
+    /device/i,
+    /tool/i
+  ]);
+
+  const problem = findFieldValue(payload, [
+    /неисправ/i,
+    /проблем/i,
+    /problem/i,
+    /issue/i,
+    /malfunction/i
+  ]);
+
+  const comment = findFieldValue(payload, [
+    /коммент/i,
+    /сообщ/i,
+    /описан/i,
+    /comment/i,
+    /message/i,
+    /description/i
+  ]);
+
+  const lines = [];
+
+  if (device) lines.push(`Тип устройства: ${device}`);
+  if (problem) lines.push(`Неисправность: ${problem}`);
+  if (comment) lines.push(`Комментарий: ${comment}`);
+
+  if (lines.length) return lines.join('\n');
+
+  const direct = pick(payload, [
+    'comment',
+    'message',
+    'description',
+    'text',
+    'problem',
+    'data.comment',
+    'data.message',
+    'data.description',
+    'data.text'
+  ], '');
+
+  if (direct) return extractRepairSubjectFromText(direct);
+
+  return 'Новая заявка с сайта';
+}
+
+function getRoLeadClientName(payload) {
+  return titleCaseName(pick(payload, [
+    'metadata.client.fullname',
+    'metadata.client.full_name',
+    'metadata.client.name',
+    'metadata.client.first_name',
+    'client.fullname',
+    'client.full_name',
+    'client.name',
+    'client.first_name',
+    'data.client.fullname',
+    'data.client.full_name',
+    'data.client.name',
+    'data.client.first_name'
+  ], ''));
+}
+
+function getRoLeadSubject(payload) {
+  const text = findFormTextInPayload(payload);
+
+  if (text) {
+    const extracted = extractRepairSubjectFromText(text);
+    if (extracted) return extracted;
+  }
+
+  const direct = pick(payload, [
+    'metadata.lead.comment',
+    'metadata.lead.description',
+    'metadata.lead.text',
+    'metadata.lead.message',
+    'lead.comment',
+    'lead.description',
+    'lead.text',
+    'lead.message',
+    'data.lead.comment',
+    'data.lead.description',
+    'data.lead.text',
+    'data.lead.message',
+    'comment',
+    'description',
+    'message',
+    'text'
+  ], '');
+
+  if (direct && !/^\d+$/.test(String(direct).trim())) {
+    return extractRepairSubjectFromText(direct);
+  }
+
+  const leadName = String(pick(payload, [
+    'metadata.lead.name',
+    'lead.name',
+    'data.lead.name'
+  ], '')).trim();
+
+  if (leadName && !/^\d+$/.test(leadName)) {
+    return leadName;
+  }
+
+  return '';
+}
+
+async function sendRepairRequestAlert({ clientName, clientPhone, subject }) {
+  const normalizedPhone = normalizePhone(clientPhone);
+  const waLink = normalizedPhone ? `https://wa.me/${normalizedPhone}` : 'Телефон не найден';
+
+  await sendTemplate(MANAGER_WHATSAPP, 'new_repair_request_alert', [
+    clientName || 'Клиент',
+    normalizedPhone ? prettyPhone(normalizedPhone) : 'не указан',
+    subject || 'Новая заявка с сайта',
+    waLink
+  ]);
+
+  log('Repair request alert sent to manager', {
+    clientName,
+    clientPhone: normalizedPhone || '',
+    hasPhone: Boolean(normalizedPhone)
+  });
+}
+
+async function handleSiteRepairRequest(payload) {
+  const clientName = getSiteClientName(payload);
+  const clientPhone = findFirstPhone(payload);
+  const subject = getSiteRepairSubject(payload);
+
+  log('Site repair request received:', {
+    clientName,
+    clientPhone: clientPhone || '',
+    subject
+  });
+
+  await sendRepairRequestAlert({
+    clientName,
+    clientPhone,
+    subject
+  });
+
+  return {
+    ok: true,
+    clientName,
+    clientPhone,
+    subject
+  };
+}
+
+async function handleRoRepairRequest(payload) {
+  const clientName = getRoLeadClientName(payload) || getClientName(payload);
+  const clientPhone = findFirstPhone(payload);
+  const subject = getRoLeadSubject(payload);
+
+  if (!clientPhone && !subject) {
+    log('RO lead has no phone and no useful comment. Skipped. Use /site-repair-request for full website form data.');
+    log('RO lead payload preview:', compactPayloadPreview(payload));
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'no phone and no useful comment'
+    };
+  }
+
+  await sendRepairRequestAlert({
+    clientName,
+    clientPhone,
+    subject: subject || 'Новое обращение в РемОнлайн'
+  });
+
+  return {
+    ok: true,
+    skipped: false,
+    clientName,
+    clientPhone,
+    subject
+  };
+}
+
 async function metaRequest(path, body) {
   if (!META_ACCESS_TOKEN) throw new Error('META_ACCESS_TOKEN is empty');
 
@@ -1648,6 +1491,119 @@ function autoReplyText() {
   ].join('\n');
 }
 
+async function handleOrderEvent(payload) {
+  const statusIdBeforeApi = getNewStatusId(payload);
+
+  if (INTERNAL_STATUS_IDS.has(statusIdBeforeApi)) {
+    log('Internal status, skip WhatsApp:', statusIdBeforeApi);
+    return;
+  }
+
+  const enriched = await enrichRoOrderPayloadWithApi(payload);
+  const fullPayload = enriched.payload;
+
+  const clientPhone = enriched.phone || findFirstPhone(fullPayload);
+
+  if (!clientPhone) {
+    log('No client phone found, skip WhatsApp template');
+    log('RemOnline payload preview:', compactPayloadPreview(fullPayload));
+    return;
+  }
+
+  const clientName = getClientName(fullPayload);
+  const orderNumber = getOrderNumber(fullPayload);
+  const status = getOrderStatus(fullPayload);
+  const statusId = statusIdBeforeApi || getNewStatusId(fullPayload);
+  const amountDebug = getOrderAmountDebug(fullPayload);
+  const orderId = getRoOrderId(payload) || getRoOrderId(fullPayload);
+
+  log('Order debug:', {
+    eventName: getEventName(payload),
+    statusId: statusId || null,
+    orderId: orderId || null,
+    orderNumber,
+    clientName,
+    clientPhone,
+    phoneSource: enriched.source,
+    status,
+    amount: amountDebug.formatted,
+    amountSource: amountDebug.source
+  });
+
+  if (isOrderReady(fullPayload)) {
+    await sendTemplate(clientPhone, 'order_ready', [
+      clientName,
+      orderNumber,
+      amountDebug.formatted
+    ]);
+
+    return log('order_ready sent', clientPhone, {
+      clientName,
+      orderNumber,
+      statusId,
+      amount: amountDebug.formatted,
+      amountSource: amountDebug.source
+    });
+  }
+
+  if (isOrderClosed(fullPayload)) {
+    scheduleReceiptSearch({
+      orderId,
+      clientPhone,
+      clientName,
+      orderNumber,
+      baseOrderData: fullPayload.ro_api_order
+    });
+
+    try {
+      await sendTemplate(clientPhone, 'order_review_request', [
+        clientName
+      ]);
+
+      log('order_review_request sent', clientPhone, {
+        clientName,
+        orderNumber,
+        statusId
+      });
+    } catch (err) {
+      console.error('order_review_request send error:', err.data || err.message || err);
+    }
+
+    return;
+  }
+
+  if (isOrderAccepted(fullPayload)) {
+    await sendTemplate(clientPhone, 'order_accepted', [
+      clientName,
+      orderNumber
+    ]);
+
+    return log('order_accepted sent', clientPhone, {
+      clientName,
+      orderNumber,
+      statusId
+    });
+  }
+
+  log('Unhandled/non-customer status, skip WhatsApp:', {
+    statusId: statusId || null,
+    orderNumber,
+    status
+  });
+}
+
+function checkRoSecret(req) {
+  if (!RO_SECRET) return true;
+
+  const provided =
+    req.query.secret ||
+    req.headers['x-ro-secret'] ||
+    req.headers['x-webhook-secret'] ||
+    req.headers['x-remonline-secret'];
+
+  return String(provided || '') === RO_SECRET;
+}
+
 app.get('/health', (req, res) => {
   res.json({
     ok: true,
@@ -1663,7 +1619,8 @@ app.get('/health', (req, res) => {
     internalStatusIds: [...INTERNAL_STATUS_IDS],
     receiptTemplateName: RECEIPT_TEMPLATE_NAME,
     receiptSearchEnabled: RECEIPT_SEARCH_ENABLED,
-    receiptRetryMs: RECEIPT_RETRY_MS
+    receiptRetryMs: RECEIPT_RETRY_MS,
+    siteRepairRequestWebhook: '/site-repair-request'
   });
 });
 
@@ -1705,136 +1662,34 @@ app.post('/wa/webhook', async (req, res) => {
   }
 });
 
-function checkRoSecret(req) {
-  if (!RO_SECRET) return true;
+app.post('/site-repair-request', async (req, res) => {
+  try {
+    const result = await handleSiteRepairRequest(req.body || {});
 
-  const provided =
-    req.query.secret ||
-    req.headers['x-ro-secret'] ||
-    req.headers['x-webhook-secret'] ||
-    req.headers['x-remonline-secret'];
+    res.json({
+      ok: true,
+      received: true,
+      ...result
+    });
+  } catch (err) {
+    console.error('site-repair-request error:', err.data || err.message || err);
 
-  return String(provided || '') === RO_SECRET;
-}
-
-async function handleRepairRequest(payload) {
-  const enriched = await enrichRoLeadPayloadWithApi(payload);
-  const fullPayload = enriched.payload;
-
-  const clientName = getClientName(fullPayload);
-  const clientPhone = enriched.phone || findFirstPhone(fullPayload);
-  const subject = getRepairSubject(fullPayload);
-  const clientWaLink = clientPhone ? `https://wa.me/${clientPhone}` : 'Телефон не найден';
-
-  if (!clientPhone) {
-    log('No client phone found for repair request, sending manager alert without phone');
-    log('RemOnline payload preview:', compactPayloadPreview(fullPayload));
-  } else {
-    log('Client phone found for repair request:', clientPhone, 'source:', enriched.source);
-  }
-
-  await sendTemplate(MANAGER_WHATSAPP, 'new_repair_request_alert', [
-    clientName || 'Клиент',
-    clientPhone ? `+${clientPhone}` : 'не указан',
-    subject || 'Новое обращение',
-    clientWaLink
-  ]);
-
-  log('Repair request alert sent to manager');
-}
-
-async function handleOrderEvent(payload) {
-  const statusIdBeforeApi = getNewStatusId(payload);
-
-  if (INTERNAL_STATUS_IDS.has(statusIdBeforeApi)) {
-    log('Internal status, skip WhatsApp:', statusIdBeforeApi);
-    return;
-  }
-
-  const enriched = await enrichRoOrderPayloadWithApi(payload);
-  const fullPayload = enriched.payload;
-
-  const clientPhone = enriched.phone || findFirstPhone(fullPayload);
-
-  if (!clientPhone) {
-    log('No client phone found, skip WhatsApp template');
-    log('RemOnline payload preview:', compactPayloadPreview(fullPayload));
-    return;
-  }
-
-  log('Client phone found:', clientPhone, 'source:', enriched.source);
-
-  const clientName = getClientName(fullPayload);
-  const orderNumber = getOrderNumber(fullPayload);
-  const status = getOrderStatus(fullPayload);
-  const statusId = statusIdBeforeApi || getNewStatusId(fullPayload);
-  const amountDebug = getOrderAmountDebug(fullPayload);
-  const orderId = getRoOrderId(payload) || getRoOrderId(fullPayload);
-
-  log('Order debug:', {
-    eventName: getEventName(payload),
-    statusId: statusId || null,
-    orderId: orderId || null,
-    orderNumber,
-    clientName,
-    status,
-    amount: amountDebug.formatted,
-    amountSource: amountDebug.source
-  });
-
-  if (isOrderReady(fullPayload)) {
-    await sendTemplate(clientPhone, 'order_ready', [
-      clientName,
-      orderNumber,
-      amountDebug.formatted
-    ]);
-
-    return log('order_ready sent', clientPhone, {
-      clientName,
-      orderNumber,
-      statusId,
-      amount: amountDebug.formatted,
-      amountSource: amountDebug.source
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+      meta: err.data
     });
   }
+});
 
-  if (isOrderClosed(fullPayload)) {
-    scheduleReceiptSearch({
-      orderId,
-      clientPhone,
-      clientName,
-      orderNumber,
-      baseOrderData: fullPayload.ro_api_order
-    });
-
-    try {
-      await sendTemplate(clientPhone, 'order_review_request', [
-        clientName
-      ]);
-
-      log('order_review_request sent', clientPhone, { clientName, orderNumber, statusId });
-    } catch (err) {
-      console.error('order_review_request send error:', err.data || err.message || err);
-    }
-
-    return;
-  }
-
-  if (isOrderAccepted(fullPayload)) {
-    await sendTemplate(clientPhone, 'order_accepted', [
-      clientName,
-      orderNumber
-    ]);
-
-    return log('order_accepted sent', clientPhone, { clientName, orderNumber, statusId });
-  }
-
-  log('Unhandled/non-customer status, skip WhatsApp:', {
-    statusId: statusId || null,
-    orderNumber,
-    status
+app.get('/site-repair-request', (req, res) => {
+  res.json({
+    ok: true,
+    endpoint: '/site-repair-request',
+    method: 'POST',
+    message: 'Flexbe webhook should send form data here.'
   });
-}
+});
 
 app.post('/ro/webhook', async (req, res) => {
   if (!checkRoSecret(req)) {
@@ -1856,7 +1711,7 @@ app.post('/ro/webhook', async (req, res) => {
     log('RemOnline webhook event:', eventName);
 
     if (isRepairRequestCreated(payload)) {
-      return await handleRepairRequest(payload);
+      return await handleRoRepairRequest(payload);
     }
 
     if (isOrderCreated(payload) || isOrderRelatedPayload(payload) || isOrderAccepted(payload)) {
@@ -1894,7 +1749,7 @@ function defaultTemplateParams(template) {
     new_repair_request_alert: [
       'Павел',
       '+77076669955',
-      'Новое обращение',
+      'Тип устройства: Перфоратор\nНеисправность: Не реагирует на кнопку\nКомментарий: тест',
       'https://wa.me/77076669955'
     ],
     order_accepted: [
@@ -1949,81 +1804,28 @@ app.get('/test-template', async (req, res) => {
   }
 });
 
-app.get('/test-reply', async (req, res) => {
+app.get('/test-site-request', async (req, res) => {
   try {
-    const to = normalizePhone(req.query.to || MANAGER_WHATSAPP);
-    const data = await sendWhatsAppText(to, autoReplyText());
+    const payload = {
+      name: req.query.name || 'Павел',
+      phone: req.query.phone || '77076669955',
+      device: req.query.device || 'Перфоратор',
+      problem: req.query.problem || 'Не реагирует на кнопку',
+      comment: req.query.comment || 'Тестовая заявка'
+    };
+
+    const result = await handleSiteRepairRequest(payload);
 
     res.json({
       ok: true,
-      data
+      payload,
+      result
     });
   } catch (err) {
     res.status(500).json({
       ok: false,
       error: err.message,
       meta: err.data
-    });
-  }
-});
-
-app.get('/test-ro', async (req, res) => {
-  try {
-    const orderId = String(req.query.orderId || '');
-    const leadId = String(req.query.leadId || '');
-    const clientId = String(req.query.clientId || '');
-
-    const result = {
-      ok: true,
-      orderId,
-      leadId,
-      clientId,
-      order: null,
-      lead: null,
-      client: null,
-      phoneFromOrder: '',
-      phoneFromLead: '',
-      phoneFromClient: '',
-      guessedClientNameFromOrder: '',
-      orderStatusId: '',
-      orderStatus: '',
-      orderAmount: 'уточняется',
-      orderAmountSource: '',
-      orderAmountCandidates: []
-    };
-
-    if (orderId) {
-      result.order = await fetchRoOrder(orderId);
-      const payloadForOrder = { ro_api_order: result.order };
-
-      result.phoneFromOrder = findFirstPhone(result.order);
-      result.guessedClientNameFromOrder = getClientName(payloadForOrder);
-      result.orderStatusId = getNewStatusId(payloadForOrder);
-      result.orderStatus = getOrderStatus(payloadForOrder);
-
-      const amountDebug = getOrderAmountDebug(payloadForOrder);
-      result.orderAmount = amountDebug.formatted;
-      result.orderAmountSource = amountDebug.source;
-      result.orderAmountCandidates = amountDebug.candidates;
-    }
-
-    if (leadId) {
-      result.lead = await fetchRoLead(leadId);
-      result.phoneFromLead = findFirstPhone(result.lead);
-    }
-
-    if (clientId) {
-      result.client = await fetchRoClient(clientId);
-      result.phoneFromClient = findFirstPhone(result.client);
-    }
-
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-      status: err.status,
-      data: err.data
     });
   }
 });
