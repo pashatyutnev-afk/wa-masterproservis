@@ -444,7 +444,276 @@ async function fetchRoClient(clientId) {
     `/clients?ids[]=${clientId}`
   ], `client ${clientId}`);
 }
+function asRoArray(data) {
+  const buckets = [
+    data,
+    data?.data,
+    data?.result,
+    data?.items,
+    data?.rows,
+    data?.leads,
+    data?.clients,
+    data?.data?.data,
+    data?.data?.items,
+    data?.data?.rows,
+    data?.result?.data,
+    data?.result?.items,
+    data?.result?.rows
+  ];
 
+  for (const bucket of buckets) {
+    if (Array.isArray(bucket)) return bucket;
+  }
+
+  if (data && typeof data === 'object') return [data];
+
+  return [];
+}
+
+function normalizeCompareText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getObjectName(obj) {
+  return String(pick(obj, [
+    'fullname',
+    'full_name',
+    'name',
+    'first_name',
+    'client.fullname',
+    'client.full_name',
+    'client.name',
+    'client.first_name',
+    'data.fullname',
+    'data.full_name',
+    'data.name',
+    'data.first_name',
+    'data.client.fullname',
+    'data.client.full_name',
+    'data.client.name',
+    'data.client.first_name'
+  ], '')).trim();
+}
+
+function getLeadClientName(payload) {
+  return titleCaseName(pick(payload, [
+    'metadata.client.fullname',
+    'metadata.client.full_name',
+    'metadata.client.name',
+    'metadata.client.first_name',
+
+    'client.fullname',
+    'client.full_name',
+    'client.name',
+    'client.first_name',
+
+    'data.client.fullname',
+    'data.client.full_name',
+    'data.client.name',
+    'data.client.first_name',
+
+    'ro_api_lead.client.fullname',
+    'ro_api_lead.client.full_name',
+    'ro_api_lead.client.name',
+    'ro_api_lead.client.first_name',
+    'ro_api_lead.data.client.fullname',
+    'ro_api_lead.data.client.full_name',
+    'ro_api_lead.data.client.name',
+    'ro_api_lead.data.client.first_name'
+  ], ''));
+}
+
+function pickBestClientByName(data, wantedName) {
+  const wanted = normalizeCompareText(wantedName);
+  const list = asRoArray(data).filter((item) => item && typeof item === 'object');
+
+  if (!list.length) return null;
+
+  const withPhones = list.filter((item) => findFirstPhone(item));
+
+  if (!wanted) {
+    return withPhones[0] || list[0] || null;
+  }
+
+  const exact = withPhones.find((item) => normalizeCompareText(getObjectName(item)) === wanted);
+  if (exact) return exact;
+
+  const contains = withPhones.find((item) => {
+    const name = normalizeCompareText(getObjectName(item));
+    return name && (name.includes(wanted) || wanted.includes(name));
+  });
+
+  if (contains) return contains;
+
+  return withPhones[0] || list[0] || null;
+}
+
+async function searchRoClientByName(clientName) {
+  const name = String(clientName || '').trim();
+  if (!name) return null;
+
+  const q = encodeURIComponent(name);
+
+  const paths = [
+    `/clients?query=${q}`,
+    `/clients?search=${q}`,
+    `/clients?name=${q}`,
+    `/clients?fullname=${q}`,
+    `/clients?full_name=${q}`,
+    `/clients?filter[name]=${q}`,
+    `/clients?filter[fullname]=${q}`,
+    `/clients?filter[full_name]=${q}`,
+    `/contacts?query=${q}`,
+    `/contacts?search=${q}`,
+    `/contacts?name=${q}`,
+    `/contacts?fullname=${q}`
+  ];
+
+  let lastErr = null;
+
+  for (const path of paths) {
+    try {
+      const data = await roApiGetRaw(path);
+      const client = pickBestClientByName(data, name);
+
+      if (client && findFirstPhone(client)) {
+        log('RO API client search success:', path);
+        return {
+          client,
+          path
+        };
+      }
+
+      log('RO API client search empty/no phone:', path);
+    } catch (err) {
+      lastErr = err;
+      log('RO API client search failed:', path, err.status || '', err.message);
+    }
+  }
+
+  if (lastErr) {
+    log('RO API client search failed finally:', lastErr.status || '', lastErr.message);
+  }
+
+  return null;
+}
+
+function pickLeadFromListResponse(data, leadId) {
+  const id = String(leadId || '');
+  const list = asRoArray(data).filter((item) => item && typeof item === 'object');
+
+  if (!list.length) return null;
+
+  const exact = list.find((item) => {
+    const itemId = String(pick(item, [
+      'id',
+      'lead_id',
+      'object_id',
+      'data.id',
+      'data.lead_id',
+      'data.object_id'
+    ], ''));
+
+    return itemId === id;
+  });
+
+  if (exact) return exact;
+
+  if (list.length === 1) return list[0];
+
+  return null;
+}
+
+function extractRepairSubjectFromText(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const device = lines.find((line) => /^Тип устройства\s*:/i.test(line));
+  const problem = lines.find((line) => /^Неисправность\s*:/i.test(line));
+  const comment = lines.find((line) => /^Комментарий\s*:/i.test(line));
+
+  const useful = [device, problem, comment].filter(Boolean);
+
+  if (useful.length) {
+    return useful.join('\n');
+  }
+
+  const cleaned = lines
+    .filter((line) => !/^Форма\s*:/i.test(line))
+    .filter((line) => !/^FormID\s*:/i.test(line))
+    .filter((line) => !/^Страница\s*:/i.test(line))
+    .filter((line) => !/^Прикрепить фото\s*:/i.test(line))
+    .join('\n')
+    .trim();
+
+  return cleaned || text;
+}
+
+function findFormTextInPayload(obj) {
+  const candidates = [];
+
+  function walk(node, path = '', depth = 0) {
+    if (node == null || depth > 12) return;
+
+    if (typeof node === 'string' || typeof node === 'number') {
+      const text = String(node || '').trim();
+
+      if (
+        text &&
+        (
+          /Тип устройства\s*:/i.test(text) ||
+          /Неисправность\s*:/i.test(text) ||
+          /Комментарий\s*:/i.test(text) ||
+          /FormID\s*:/i.test(text)
+        )
+      ) {
+        candidates.push({
+          path,
+          text
+        });
+      }
+
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
+      return;
+    }
+
+    if (typeof node === 'object') {
+      for (const [key, value] of Object.entries(node)) {
+        walk(value, path ? `${path}.${key}` : key, depth + 1);
+      }
+    }
+  }
+
+  walk(obj);
+
+  candidates.sort((a, b) => {
+    const score = (item) => {
+      let s = 0;
+      if (/comment|description|message|text|notes|коммент/i.test(item.path)) s -= 10;
+      if (/Тип устройства\s*:/i.test(item.text)) s -= 5;
+      if (/Неисправность\s*:/i.test(item.text)) s -= 5;
+      if (/Комментарий\s*:/i.test(item.text)) s -= 5;
+      return s;
+    };
+
+    return score(a) - score(b);
+  });
+
+  return candidates[0]?.text || '';
+}
 async function fetchRoOrderPublicUrl(orderId) {
   if (!orderId) return null;
 
