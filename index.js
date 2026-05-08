@@ -687,56 +687,65 @@ function getClientName(payload) {
 }
 
 function getRepairSubject(payload) {
-  return String(pick(payload, [
-    'subject',
-    'title',
-    'message',
+  const rawSubject = String(pick(payload, [
     'comment',
     'description',
+    'message',
     'problem',
+    'text',
 
     'lead.comment',
+    'lead.description',
     'lead.text',
-    'lead.name',
+    'lead.message',
+
     'metadata.lead.comment',
+    'metadata.lead.description',
     'metadata.lead.text',
-    'metadata.lead.name',
+    'metadata.lead.message',
 
     'appeal.comment',
+    'appeal.description',
     'appeal.text',
-    'request.text',
+    'appeal.message',
 
-    'data.subject',
-    'data.title',
-    'data.message',
+    'request.comment',
+    'request.description',
+    'request.text',
+    'request.message',
+
     'data.comment',
     'data.description',
-
-    'metadata.order.name',
-    'order.name',
-    'order.type',
-    'order.device',
-    'data.order.name',
-
-    'device',
-    'product.name',
-    'item.name',
+    'data.message',
+    'data.text',
 
     'ro_api_lead.comment',
-    'ro_api_lead.text',
     'ro_api_lead.description',
-    'ro_api_lead.name',
+    'ro_api_lead.text',
     'ro_api_lead.message',
 
-    'ro_api_order.device',
-    'ro_api_order.type',
     'ro_api_order.comment',
     'ro_api_order.description',
-    'ro_api_order.data.device',
-    'ro_api_order.data.type',
-    'ro_api_order.data.comment',
-    'ro_api_order.data.description'
-  ], 'Новое обращение')).trim();
+    'ro_api_order.manager_notes',
+    'ro_api_order.engineer_notes'
+  ], '')).trim();
+
+  if (rawSubject) return rawSubject;
+
+  const leadName = String(pick(payload, [
+    'lead.name',
+    'metadata.lead.name',
+    'data.lead.name',
+    'ro_api_lead.name'
+  ], '')).trim();
+
+  // РемОнлайн иногда присылает сюда просто номер обращения: "21".
+  // Это не описание заявки, поэтому клиенту/менеджеру его не показываем как "Что нужно".
+  if (leadName && !/^\d+$/.test(leadName)) {
+    return leadName;
+  }
+
+  return 'Комментарий';
 }
 
 function getOrderNumber(payload) {
