@@ -16,18 +16,23 @@ const MANAGER_WHATSAPP = normalizePhone(process.env.MANAGER_WHATSAPP || '7707666
 
 const WHATSAPP_TEMPLATE_LANG = process.env.WHATSAPP_TEMPLATE_LANG || 'ru';
 
-const RO_SECRET = process.env.RO_SECRET || '';
 const REMONLINE_API_KEY = process.env.REMONLINE_API_KEY || '';
 const REMONLINE_API_BASE_URL = (process.env.REMONLINE_API_BASE_URL || 'https://api.roapp.io/v2').replace(/\/+$/, '');
+const RO_SECRET = process.env.RO_SECRET || '';
 
 const READY_STATUS_IDS = parseIdList(process.env.READY_STATUS_IDS || '363629');
 const CLOSED_STATUS_IDS = parseIdList(process.env.CLOSED_STATUS_IDS || '363632');
 const ACCEPTED_STATUS_IDS = parseIdList(process.env.ACCEPTED_STATUS_IDS || '');
 const INTERNAL_STATUS_IDS = parseIdList(process.env.INTERNAL_STATUS_IDS || '3045928');
 
-const RECEIPT_TEMPLATE_NAME = process.env.RECEIPT_TEMPLATE_NAME || 'order_closed_receipt';
-const RECEIPT_SEARCH_ENABLED = String(process.env.RECEIPT_SEARCH_ENABLED || 'true').toLowerCase() !== 'false';
+const TEMPLATE_SITE_REQUEST = process.env.TEMPLATE_SITE_REQUEST || 'new_repair_request_alert';
+const TEMPLATE_ORDER_ACCEPTED = process.env.TEMPLATE_ORDER_ACCEPTED || 'order_accepted';
+const TEMPLATE_ORDER_READY = process.env.TEMPLATE_ORDER_READY || 'order_ready';
+const TEMPLATE_ORDER_CLOSED_REVIEW = process.env.TEMPLATE_ORDER_CLOSED_REVIEW || 'order_review_request';
+const TEMPLATE_ORDER_RECEIPT = process.env.TEMPLATE_ORDER_RECEIPT || 'order_closed_receipt';
+
 const RECEIPT_RETRY_MS = parseRetryList(process.env.RECEIPT_RETRY_MS || '0,10000,30000,60000,180000,600000');
+const RECEIPT_SEARCH_ENABLED = String(process.env.RECEIPT_SEARCH_ENABLED || 'true').toLowerCase() !== 'false';
 
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
@@ -42,7 +47,7 @@ function parseIdList(value) {
   return new Set(
     String(value || '')
       .split(',')
-      .map((v) => v.trim())
+      .map((item) => item.trim())
       .filter(Boolean)
   );
 }
@@ -50,8 +55,8 @@ function parseIdList(value) {
 function parseRetryList(value) {
   return String(value || '')
     .split(',')
-    .map((v) => Number(String(v).trim()))
-    .filter((v) => Number.isFinite(v) && v >= 0);
+    .map((item) => Number(item.trim()))
+    .filter((item) => Number.isFinite(item) && item >= 0);
 }
 
 function normalizePhone(value) {
@@ -116,29 +121,38 @@ function looksLikeOrderNumber(value) {
   return /^[A-Za-zА-Яа-я]\d{3,}$/.test(text) || /^\d{6,}$/.test(text);
 }
 
-function cleanClientName(value) {
+function cleanName(value) {
   const text = String(value || '').trim();
 
   if (!text) return '';
   if (looksLikePhone(text)) return '';
   if (looksLikeOrderNumber(text)) return '';
-  if (/^(заявка|форма|обращение|новое обращение)$/i.test(text)) return '';
+  if (/^(клиент|заявка|форма|обращение|новое обращение)$/i.test(text)) return '';
 
   return text;
 }
 
 function titleCaseName(value) {
-  const text = cleanClientName(value);
+  const text = cleanName(value);
   if (!text) return '';
 
   return text
     .split(/\s+/)
-    .map((part) => part ? part[0].toUpperCase() + part.slice(1) : part)
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
     .join(' ');
 }
 
 function findFirstPhone(obj) {
   const direct = pick(obj, [
+    'phone',
+    'mobile',
+    'telephone',
+    'phone_number',
+    'phoneNumber',
+    'whatsapp',
+    'client_phone',
+    'customer_phone',
+
     'client.phone',
     'client.mobile',
     'client.phone_number',
@@ -149,15 +163,10 @@ function findFirstPhone(obj) {
     'client.phones.0.number',
     'client.phones.0.value',
 
-    'metadata.client.phone',
-    'metadata.client.mobile',
-    'metadata.client.phone_number',
-    'metadata.client.phoneNumber',
-    'metadata.client.phone.0',
-    'metadata.client.phones.0.phone',
-    'metadata.client.phones.0.number',
-    'metadata.client.phones.0.value',
-
+    'data.phone',
+    'data.mobile',
+    'data.phone_number',
+    'data.phoneNumber',
     'data.client.phone',
     'data.client.mobile',
     'data.client.phone_number',
@@ -166,6 +175,17 @@ function findFirstPhone(obj) {
     'data.client.phones.0.phone',
     'data.client.phones.0.number',
     'data.client.phones.0.value',
+    'data.form_data.phone.value',
+    'form_data.phone.value',
+
+    'metadata.client.phone',
+    'metadata.client.mobile',
+    'metadata.client.phone_number',
+    'metadata.client.phoneNumber',
+    'metadata.client.phone.0',
+    'metadata.client.phones.0.phone',
+    'metadata.client.phones.0.number',
+    'metadata.client.phones.0.value',
 
     'order.client.phone',
     'order.client.mobile',
@@ -192,43 +212,32 @@ function findFirstPhone(obj) {
     'ro_api_order.data.client.phone.0',
     'ro_api_order.data.client.phones.0.phone',
     'ro_api_order.data.client.phones.0.number',
-    'ro_api_order.data.client.phones.0.value',
-
-    'phone',
-    'mobile',
-    'telephone',
-    'phone_number',
-    'phoneNumber',
-    'whatsapp',
-    'client_phone',
-    'customer_phone'
+    'ro_api_order.data.client.phones.0.value'
   ]);
 
   const normalizedDirect = looksLikePhone(direct);
   if (normalizedDirect) return normalizedDirect;
 
-  const candidates = [];
+  const foundPhones = [];
   const seen = new Set();
 
   function walk(node, path = '', depth = 0) {
-    if (node == null || depth > 14) return;
+    if (node == null || depth > 12) return;
 
     if (typeof node === 'string' || typeof node === 'number') {
-      const found = looksLikePhone(node);
-      const keyLooksPhone = /phone|mobile|tel|contact|whatsapp|wa|номер|телефон|домашний/i.test(path);
+      const keyLooksPhone = /phone|mobile|tel|telephone|whatsapp|wa|номер|телефон|домашний/i.test(path);
+      const phone = looksLikePhone(node);
 
-      if (found && (keyLooksPhone || found.length === 11)) {
-        if (!seen.has(found)) {
-          seen.add(found);
-          candidates.push(found);
-        }
+      if (keyLooksPhone && phone && !seen.has(phone)) {
+        seen.add(phone);
+        foundPhones.push(phone);
       }
 
       return;
     }
 
     if (Array.isArray(node)) {
-      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
+      node.forEach((item, index) => walk(item, `${path}.${index}`, depth + 1));
       return;
     }
 
@@ -241,13 +250,12 @@ function findFirstPhone(obj) {
 
   walk(obj);
 
-  return candidates[0] || '';
+  return foundPhones[0] || '';
 }
 
 function findFirstId(obj, paths) {
   const direct = pick(obj, paths, '');
-  if (direct !== '') return String(direct);
-  return '';
+  return direct !== '' ? String(direct) : '';
 }
 
 function getRoOrderId(payload) {
@@ -266,39 +274,6 @@ function getRoOrderId(payload) {
     'ro_api_order.data.id',
     'ro_api_order.order.id',
     'ro_api_order.data.order.id'
-  ]);
-}
-
-function getRoLeadId(payload) {
-  return findFirstId(payload, [
-    'metadata.lead.id',
-    'lead.id',
-    'data.lead.id',
-    'context.lead.id',
-    'metadata.lead_id',
-    'object.id',
-    'object_id',
-    'context.object_id',
-    'data.object_id'
-  ]);
-}
-
-function getRoClientId(payload) {
-  return findFirstId(payload, [
-    'metadata.client.id',
-    'client.id',
-    'customer.id',
-    'data.client.id',
-    'data.customer.id',
-    'order.client.id',
-    'metadata.order.client.id',
-    'data.order.client.id',
-    'context.client.id',
-    'metadata.client_id',
-    'ro_api_order.client.id',
-    'ro_api_order.client_id',
-    'ro_api_order.data.client.id',
-    'ro_api_order.data.client_id'
   ]);
 }
 
@@ -344,11 +319,9 @@ function compactPayloadPreview(payload) {
 
 function unwrapRoResponse(data) {
   if (!data || typeof data !== 'object') return data;
-
   if (data.data && typeof data.data === 'object' && !Array.isArray(data.data)) return data.data;
   if (data.result && typeof data.result === 'object') return data.result;
   if (data.item && typeof data.item === 'object') return data.item;
-
   return data;
 }
 
@@ -387,38 +360,12 @@ async function roApiGetRaw(path) {
   return data;
 }
 
-async function roApiGet(path) {
-  const raw = await roApiGetRaw(path);
-  return unwrapRoResponse(raw);
-}
-
-async function tryRoApiPaths(paths, label, options = {}) {
-  let lastErr = null;
-
-  for (const path of paths) {
-    try {
-      const data = options.raw ? await roApiGetRaw(path) : await roApiGet(path);
-      log(`RO API ${label} success:`, path);
-      return data;
-    } catch (err) {
-      lastErr = err;
-      log(`RO API ${label} failed:`, path, err.status || '', err.message);
-    }
-  }
-
-  if (lastErr) throw lastErr;
-  return null;
-}
-
 async function fetchRoOrder(orderId) {
   if (!orderId) return null;
 
-  return tryRoApiPaths([
-    `/orders/${orderId}`,
-    `/orders/${orderId}?include=client`,
-    `/orders/${orderId}?expand=client`,
-    `/orders/${orderId}?with=client`
-  ], `order ${orderId}`, { raw: true });
+  const data = await roApiGetRaw(`/orders/${orderId}`);
+  log('RO API order success:', `/orders/${orderId}`);
+  return unwrapRoResponse(data);
 }
 
 async function fetchRoOrderPublicUrl(orderId) {
@@ -426,50 +373,30 @@ async function fetchRoOrderPublicUrl(orderId) {
   return roApiGetRaw(`/orders/${orderId}/public-url`);
 }
 
-async function enrichRoOrderPayloadWithApi(payload) {
+async function enrichRoOrderPayload(payload) {
   const orderId = getRoOrderId(payload);
-  const clientId = getRoClientId(payload);
-
-  log('Order webhook: trying RO API first.', {
-    orderId: orderId || null,
-    clientId: clientId || null
-  });
-
-  let orderData = null;
 
   if (orderId) {
     try {
-      orderData = await fetchRoOrder(orderId);
-      const phoneFromOrder = findFirstPhone(orderData);
+      const order = await fetchRoOrder(orderId);
+      const phone = findFirstPhone(order);
 
-      if (phoneFromOrder) {
-        return {
-          payload: { ...payload, ro_api_order: orderData },
-          phone: phoneFromOrder,
-          source: 'ro_api_order'
-        };
-      }
+      return {
+        payload: { ...payload, ro_api_order: order },
+        phone,
+        source: phone ? 'ro_api_order' : 'ro_api_order_no_phone'
+      };
     } catch (err) {
-      log('RO API order lookup failed finally:', err.status || '', err.message);
+      log('RO API order lookup failed:', err.status || '', err.message);
     }
   }
 
   const fallbackPhone = findFirstPhone(payload);
 
-  if (fallbackPhone) {
-    log('WARNING: RO API phone not found, fallback to webhook phone:', fallbackPhone);
-
-    return {
-      payload: { ...payload, ro_api_order: orderData },
-      phone: fallbackPhone,
-      source: 'webhook_fallback'
-    };
-  }
-
   return {
-    payload: { ...payload, ro_api_order: orderData },
-    phone: '',
-    source: 'not_found'
+    payload,
+    phone: fallbackPhone,
+    source: fallbackPhone ? 'webhook_fallback' : 'not_found'
   };
 }
 
@@ -477,9 +404,6 @@ function getClientName(payload) {
   const firstName = pick(payload, [
     'ro_api_order.client.first_name',
     'ro_api_order.data.client.first_name',
-    'ro_api_order.first_name',
-    'ro_api_order.data.first_name',
-
     'metadata.client.first_name',
     'client.first_name',
     'data.client.first_name',
@@ -494,12 +418,6 @@ function getClientName(payload) {
     'ro_api_order.data.client.name',
     'ro_api_order.data.client.fullname',
     'ro_api_order.data.client.full_name',
-    'ro_api_order.name',
-    'ro_api_order.fullname',
-    'ro_api_order.full_name',
-    'ro_api_order.data.name',
-    'ro_api_order.data.fullname',
-    'ro_api_order.data.full_name',
 
     'metadata.client.fullname',
     'metadata.client.full_name',
@@ -562,14 +480,11 @@ function getOrderStatus(payload) {
     'status.name',
     'status.title',
     'status',
-    'new_status',
     'new_status.name',
     'order.status.name',
     'order.status.title',
-    'order.status',
     'data.status.name',
     'data.status.title',
-    'data.status',
     'data.order.status.name',
     'data.order.status.title',
     'metadata.new.name',
@@ -578,10 +493,8 @@ function getOrderStatus(payload) {
     'metadata.new.status.title',
     'ro_api_order.status.name',
     'ro_api_order.status.title',
-    'ro_api_order.status',
     'ro_api_order.data.status.name',
-    'ro_api_order.data.status.title',
-    'ro_api_order.data.status'
+    'ro_api_order.data.status.title'
   ], 'Статус изменён')).trim();
 }
 
@@ -589,8 +502,7 @@ function parseMoneyValue(value) {
   if (value === null || value === undefined) return null;
 
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) return null;
-    return value;
+    return Number.isFinite(value) ? value : null;
   }
 
   const text = String(value).trim();
@@ -604,9 +516,7 @@ function parseMoneyValue(value) {
   if (!/^-?\d+(\.\d+)?$/.test(normalized)) return null;
 
   const num = Number(normalized);
-  if (!Number.isFinite(num)) return null;
-
-  return num;
+  return Number.isFinite(num) ? num : null;
 }
 
 function formatMoney(num) {
@@ -621,28 +531,18 @@ function formatMoney(num) {
   return rounded.toFixed(2).replace('.', ',');
 }
 
-function getOrderAmountDebug(payload) {
+function getOrderAmount(payload) {
   const paths = [
     'ro_api_order.total',
     'ro_api_order.data.total',
     'ro_api_order.order.total',
     'ro_api_order.data.order.total',
-
     'ro_api_order.sum',
     'ro_api_order.data.sum',
-    'ro_api_order.order.sum',
-    'ro_api_order.data.order.sum',
-
     'ro_api_order.amount',
     'ro_api_order.data.amount',
-    'ro_api_order.order.amount',
-    'ro_api_order.data.order.amount',
-
     'ro_api_order.payed',
     'ro_api_order.data.payed',
-    'ro_api_order.order.payed',
-    'ro_api_order.data.order.payed',
-
     'amount',
     'total',
     'price',
@@ -653,12 +553,8 @@ function getOrderAmountDebug(payload) {
     'order.sum',
     'metadata.order.total',
     'metadata.order.amount',
-    'metadata.order.price',
-    'metadata.order.sum',
     'data.total',
-    'data.amount',
-    'data.price',
-    'data.sum'
+    'data.amount'
   ];
 
   const candidates = [];
@@ -668,93 +564,49 @@ function getOrderAmountDebug(payload) {
     const parsed = parseMoneyValue(raw);
 
     if (parsed !== null && parsed >= 0 && parsed < 100000000) {
-      candidates.push({
-        path,
-        value: parsed,
-        raw
-      });
+      candidates.push({ path, value: parsed, raw });
     }
   }
 
   const best = candidates.find((item) => item.value > 0) || candidates[0];
 
-  if (best) {
-    return {
-      value: best.value,
-      formatted: `${formatMoney(best.value)} ₸`,
-      source: best.path,
-      raw: best.raw,
-      candidates
-    };
-  }
-
   return {
-    value: null,
-    formatted: 'уточняется',
-    source: 'not_found',
-    raw: null,
+    formatted: best ? `${formatMoney(best.value)} ₸` : 'уточняется',
+    source: best?.path || 'not_found',
     candidates
   };
 }
 
 function extractUrlsFromText(value) {
-  const text = String(value || '');
-  const matches = text.match(/https?:\/\/[^\s"'<>]+/g) || [];
-
-  return matches.map((url) => url.replace(/[),.;]+$/g, ''));
+  return String(value || '').match(/https?:\/\/[^\s"'<>]+/g) || [];
 }
 
 function receiptUrlLooksGood(url) {
   return /roapp\.page|cabinet\.kofd\.kz|kofd|ofd|webkassa|receipt|check|cheque|fiscal|pdf|consumer|qr/i.test(String(url || ''));
 }
 
-function scoreReceiptUrl(url) {
-  const value = String(url || '');
-
-  if (/cabinet\.kofd\.kz\/consumer/i.test(value)) return 0;
-  if (/kofd/i.test(value)) return 1;
-  if (/webkassa/i.test(value)) return 2;
-  if (/fiscal|receipt|check|cheque/i.test(value)) return 3;
-  if (/roapp\.page/i.test(value)) return 4;
-
-  return 10;
-}
-
 function findReceiptCandidates(obj) {
   const candidates = [];
   const seen = new Set();
-
-  function addCandidate(url, path, raw) {
-    if (!url) return;
-
-    const cleanUrl = String(url).replace(/[),.;]+$/g, '');
-
-    if (!/^https?:\/\//i.test(cleanUrl)) return;
-    if (!receiptUrlLooksGood(cleanUrl)) return;
-    if (seen.has(cleanUrl)) return;
-
-    seen.add(cleanUrl);
-
-    candidates.push({
-      url: cleanUrl,
-      path,
-      raw: String(raw || '').slice(0, 500)
-    });
-  }
 
   function walk(node, path = '', depth = 0) {
     if (node == null || depth > 12) return;
 
     if (typeof node === 'string' || typeof node === 'number') {
       for (const url of extractUrlsFromText(node)) {
-        addCandidate(url, path, node);
+        const cleanUrl = url.replace(/[),.;]+$/g, '');
+
+        if (receiptUrlLooksGood(cleanUrl) && !seen.has(cleanUrl)) {
+          seen.add(cleanUrl);
+          candidates.push({ url: cleanUrl, path });
+        }
       }
 
       return;
     }
 
     if (Array.isArray(node)) {
-      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
+      node.forEach((item, index) => walk(item, `${path}.${index}`, depth + 1));
       return;
     }
 
@@ -767,63 +619,37 @@ function findReceiptCandidates(obj) {
 
   walk(obj);
 
-  return candidates.sort((a, b) => {
-    const scoreA = scoreReceiptUrl(a.url);
-    const scoreB = scoreReceiptUrl(b.url);
+  candidates.sort((a, b) => {
+    const score = (item) => {
+      if (/cabinet\.kofd\.kz\/consumer/i.test(item.url)) return 0;
+      if (/kofd/i.test(item.url)) return 1;
+      if (/webkassa/i.test(item.url)) return 2;
+      if (/receipt|check|cheque|fiscal/i.test(item.url)) return 3;
+      if (/roapp\.page/i.test(item.url)) return 4;
+      return 10;
+    };
 
-    if (scoreA !== scoreB) return scoreA - scoreB;
-    return String(a.path).localeCompare(String(b.path));
+    return score(a) - score(b);
   });
+
+  return candidates;
 }
 
-async function findReceiptLink(orderId, baseOrderData = null) {
-  const sourcesChecked = [];
+async function findReceiptLink(orderId, orderData = null) {
   const candidates = [];
+  const sourcesChecked = [];
 
-  function addSource(path, ok, error = '') {
-    sourcesChecked.push({
-      path,
-      ok,
-      error: String(error || '').slice(0, 300)
-    });
-  }
-
-  function addCandidatesFrom(sourcePath, data) {
-    const found = findReceiptCandidates(data);
-
-    for (const item of found) {
-      candidates.push({
-        ...item,
-        sourcePath
-      });
-    }
-  }
-
-  if (baseOrderData) {
-    addSource('base_ro_api_order', true);
-    addCandidatesFrom('base_ro_api_order', baseOrderData);
+  if (orderData) {
+    sourcesChecked.push({ path: 'order', ok: true });
+    candidates.push(...findReceiptCandidates(orderData).map((item) => ({ ...item, sourcePath: 'order' })));
   }
 
   try {
     const publicUrlData = await fetchRoOrderPublicUrl(orderId);
-
-    addSource(`/orders/${orderId}/public-url`, true);
-    addCandidatesFrom(`/orders/${orderId}/public-url`, publicUrlData);
+    sourcesChecked.push({ path: `/orders/${orderId}/public-url`, ok: true });
+    candidates.push(...findReceiptCandidates(publicUrlData).map((item) => ({ ...item, sourcePath: `/orders/${orderId}/public-url` })));
   } catch (err) {
-    addSource(`/orders/${orderId}/public-url`, false, `${err.status || ''} ${err.message || ''}`);
-    log('RO API public-url failed:', err.status || '', err.message);
-  }
-
-  if (!baseOrderData) {
-    try {
-      const orderData = await fetchRoOrder(orderId);
-
-      addSource(`/orders/${orderId}`, true);
-      addCandidatesFrom(`/orders/${orderId}`, orderData);
-    } catch (err) {
-      addSource(`/orders/${orderId}`, false, `${err.status || ''} ${err.message || ''}`);
-      log('RO API order fallback for receipt failed:', err.status || '', err.message);
-    }
+    sourcesChecked.push({ path: `/orders/${orderId}/public-url`, ok: false, error: `${err.status || ''} ${err.message || ''}` });
   }
 
   const unique = [];
@@ -831,18 +657,9 @@ async function findReceiptLink(orderId, baseOrderData = null) {
 
   for (const item of candidates) {
     if (seen.has(item.url)) continue;
-
     seen.add(item.url);
     unique.push(item);
   }
-
-  unique.sort((a, b) => {
-    const scoreA = scoreReceiptUrl(a.url);
-    const scoreB = scoreReceiptUrl(b.url);
-
-    if (scoreA !== scoreB) return scoreA - scoreB;
-    return String(a.sourcePath).localeCompare(String(b.sourcePath));
-  });
 
   return {
     link: unique[0]?.url || '',
@@ -851,28 +668,12 @@ async function findReceiptLink(orderId, baseOrderData = null) {
   };
 }
 
-function scheduleReceiptSearch({ orderId, clientPhone, clientName, orderNumber, baseOrderData }) {
-  if (!RECEIPT_SEARCH_ENABLED) {
-    log('Receipt search disabled by RECEIPT_SEARCH_ENABLED=false');
-    return;
-  }
-
-  if (!orderId) {
-    log('Receipt search skipped: no orderId');
-    return;
-  }
+function scheduleReceiptSearch({ orderId, clientPhone, clientName, orderNumber, orderData }) {
+  if (!RECEIPT_SEARCH_ENABLED || !orderId) return;
 
   const key = String(orderId);
 
-  if (receiptSent.has(key)) {
-    log('Receipt already sent, skip:', key);
-    return;
-  }
-
-  if (receiptJobs.has(key)) {
-    log('Receipt search already scheduled, skip:', key);
-    return;
-  }
+  if (receiptSent.has(key) || receiptJobs.has(key)) return;
 
   receiptJobs.add(key);
 
@@ -889,7 +690,7 @@ function scheduleReceiptSearch({ orderId, clientPhone, clientName, orderNumber, 
         clientPhone,
         clientName,
         orderNumber,
-        baseOrderData,
+        orderData,
         attempt: index + 1,
         isLast: index === RECEIPT_RETRY_MS.length - 1
       }).catch((err) => {
@@ -901,46 +702,24 @@ function scheduleReceiptSearch({ orderId, clientPhone, clientName, orderNumber, 
   });
 }
 
-async function attemptReceiptSend({ orderId, clientPhone, clientName, orderNumber, baseOrderData, attempt, isLast }) {
+async function attemptReceiptSend({ orderId, clientPhone, clientName, orderNumber, orderData, attempt, isLast }) {
   if (receiptSent.has(orderId)) return;
 
-  log('Receipt search attempt:', {
-    orderId,
-    orderNumber,
-    attempt
-  });
-
-  const result = await findReceiptLink(orderId, baseOrderData);
+  const result = await findReceiptLink(orderId, orderData);
 
   if (!result.link) {
-    log('Receipt link not found yet:', {
-      orderId,
-      orderNumber,
-      attempt,
-      candidates: result.candidates.length,
-      sourcesChecked: result.sourcesChecked
-    });
+    log('Receipt link not found yet:', { orderId, orderNumber, attempt });
 
     if (isLast) {
       receiptJobs.delete(orderId);
-      log('Receipt search finished without link:', {
-        orderId,
-        orderNumber
-      });
+      log('Receipt search finished without link:', { orderId, orderNumber });
     }
 
     return;
   }
 
-  log('Receipt link found:', {
-    orderId,
-    orderNumber,
-    receiptUrl: result.link,
-    attempt
-  });
-
   try {
-    await sendTemplate(clientPhone, RECEIPT_TEMPLATE_NAME, [
+    await sendTemplate(clientPhone, TEMPLATE_ORDER_RECEIPT, [
       clientName,
       orderNumber,
       result.link
@@ -949,7 +728,8 @@ async function attemptReceiptSend({ orderId, clientPhone, clientName, orderNumbe
     receiptSent.add(orderId);
     receiptJobs.delete(orderId);
 
-    log('order_closed_receipt sent', clientPhone, {
+    log('order_closed_receipt sent:', {
+      clientPhone,
       clientName,
       orderNumber,
       orderId,
@@ -960,81 +740,43 @@ async function attemptReceiptSend({ orderId, clientPhone, clientName, orderNumbe
 
     if (isLast) {
       receiptJobs.delete(orderId);
-      log('Receipt link found but template was not sent after last attempt:', {
-        orderId,
-        orderNumber,
-        receiptUrl: result.link
-      });
     }
   }
-}
-
-function isLeadCreated(payload) {
-  const event = getEventName(payload);
-  const objectType = String(pick(payload, ['context.object_type'], '')).toLowerCase();
-
-  return (
-    event.includes('lead.created') ||
-    event.includes('lead') ||
-    event.includes('appeal') ||
-    event.includes('request') ||
-    objectType === 'lead'
-  );
-}
-
-function isRepairRequestCreated(payload) {
-  const event = getEventName(payload);
-  const text = JSON.stringify(payload || {}).toLowerCase();
-
-  return (
-    isLeadCreated(payload) ||
-    text.includes('обращен') ||
-    text.includes('заявк') ||
-    text.includes('lead') ||
-    text.includes('appeal')
-  ) && (
-    event.includes('create') ||
-    event.includes('created') ||
-    event.includes('new') ||
-    event.includes('add') ||
-    text.includes('created') ||
-    text.includes('создан')
-  );
 }
 
 function isOrderCreated(payload) {
   const event = getEventName(payload);
   const objectType = String(pick(payload, ['context.object_type'], '')).toLowerCase();
 
-  return (
-    event.includes('order.created') ||
-    (event.includes('order') && event.includes('created')) ||
-    (objectType === 'order' && event.includes('created'))
-  );
+  return event.includes('order.created') || (event.includes('order') && event.includes('created')) || objectType === 'order.created';
+}
+
+function isOrderRelatedPayload(payload) {
+  const event = getEventName(payload);
+  const objectType = String(pick(payload, ['context.object_type'], '')).toLowerCase();
+
+  return event.includes('order') || event.includes('status') || objectType === 'order';
+}
+
+function isLeadPayload(payload) {
+  const event = getEventName(payload);
+  const objectType = String(pick(payload, ['context.object_type'], '')).toLowerCase();
+
+  return event.includes('lead') || event.includes('appeal') || event.includes('request') || objectType === 'lead';
 }
 
 function isOrderReady(payload) {
   const statusId = getNewStatusId(payload);
   const status = getOrderStatus(payload).toLowerCase();
 
-  return (
-    READY_STATUS_IDS.has(statusId) ||
-    status.includes('готов') ||
-    status.includes('выдач')
-  );
+  return READY_STATUS_IDS.has(statusId) || status.includes('готов') || status.includes('выдач');
 }
 
 function isOrderClosed(payload) {
   const statusId = getNewStatusId(payload);
   const status = getOrderStatus(payload).toLowerCase();
 
-  return (
-    CLOSED_STATUS_IDS.has(statusId) ||
-    status.includes('закрыт') ||
-    status.includes('выдан') ||
-    status.includes('completed') ||
-    status.includes('closed')
-  );
+  return CLOSED_STATUS_IDS.has(statusId) || status.includes('закрыт') || status.includes('выдан') || status.includes('closed') || status.includes('completed');
 }
 
 function isOrderAccepted(payload) {
@@ -1042,33 +784,11 @@ function isOrderAccepted(payload) {
   const event = getEventName(payload);
   const status = getOrderStatus(payload).toLowerCase();
 
-  return (
-    isOrderCreated(payload) ||
-    ACCEPTED_STATUS_IDS.has(statusId) ||
-    (event.includes('order') && event.includes('create')) ||
-    status.includes('принят') ||
-    status.includes('нов')
-  );
-}
-
-function isOrderRelatedPayload(payload) {
-  const event = getEventName(payload);
-  const objectType = String(pick(payload, ['context.object_type'], '')).toLowerCase();
-
-  return (
-    event.includes('order') ||
-    event.includes('status') ||
-    objectType === 'order' ||
-    JSON.stringify(payload || {}).toLowerCase().includes('"order"')
-  );
+  return isOrderCreated(payload) || ACCEPTED_STATUS_IDS.has(statusId) || status.includes('принят') || status.includes('новый заказ') || (event.includes('order') && event.includes('create'));
 }
 
 function collectFormFields(obj) {
   const fields = [];
-
-  function primitive(value) {
-    return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
-  }
 
   function add(label, value, path) {
     if (value === undefined || value === null) return;
@@ -1086,35 +806,19 @@ function collectFormFields(obj) {
   function walk(node, path = '', depth = 0) {
     if (node == null || depth > 12) return;
 
-    if (primitive(node)) {
-      const last = path.split('.').pop() || path;
-      add(last, node, path);
+    if (typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') {
+      add(path.split('.').pop() || path, node, path);
       return;
     }
 
     if (Array.isArray(node)) {
-      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
+      node.forEach((item, index) => walk(item, `${path}.${index}`, depth + 1));
       return;
     }
 
     if (typeof node === 'object') {
-      const label = pick(node, [
-        'label',
-        'name',
-        'title',
-        'key',
-        'field',
-        'question',
-        'caption'
-      ], '');
-
-      const value = pick(node, [
-        'value',
-        'text',
-        'answer',
-        'content',
-        'val'
-      ], '');
+      const label = pick(node, ['orig_name', 'label', 'name', 'title', 'key', 'field', 'question', 'caption'], '');
+      const value = pick(node, ['value', 'text', 'answer', 'content', 'val'], '');
 
       if (label && value) {
         add(label, value, path);
@@ -1135,58 +839,11 @@ function findFieldValue(payload, regexList) {
   const fields = collectFormFields(payload);
 
   for (const regex of regexList) {
-    const found = fields.find((field) => {
-      const haystack = `${field.label} ${field.path}`;
-      return regex.test(haystack);
-    });
-
+    const found = fields.find((field) => regex.test(`${field.label} ${field.path}`));
     if (found?.value) return found.value;
   }
 
   return '';
-}
-
-function findFormTextInPayload(payload) {
-  const fields = collectFormFields(payload);
-
-  const found = fields.find((field) => (
-    /Тип устройства\s*:/i.test(field.value) ||
-    /Неисправность\s*:/i.test(field.value) ||
-    /Комментарий\s*:/i.test(field.value) ||
-    /FormID\s*:/i.test(field.value)
-  ));
-
-  return found?.value || '';
-}
-
-function extractRepairSubjectFromText(value) {
-  const text = String(value || '').trim();
-  if (!text) return '';
-
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const device = lines.find((line) => /^Тип устройства\s*:/i.test(line));
-  const problem = lines.find((line) => /^Неисправность\s*:/i.test(line));
-  const comment = lines.find((line) => /^Комментарий\s*:/i.test(line));
-
-  const useful = [device, problem, comment].filter(Boolean);
-
-  if (useful.length) {
-    return useful.join('\n');
-  }
-
-  const cleaned = lines
-    .filter((line) => !/^Форма\s*:/i.test(line))
-    .filter((line) => !/^FormID\s*:/i.test(line))
-    .filter((line) => !/^Страница\s*:/i.test(line))
-    .filter((line) => !/^Прикрепить фото\s*:/i.test(line))
-    .join('\n')
-    .trim();
-
-  return cleaned || text;
 }
 
 function getSiteClientName(payload) {
@@ -1197,37 +854,48 @@ function getSiteClientName(payload) {
     'fullname',
     'full_name',
     'first_name',
+
     'client.name',
     'client.fullname',
     'client.full_name',
+    'client.first_name',
+
+    'data.client.name',
+    'data.client.fullname',
+    'data.client.full_name',
+    'data.client.first_name',
+
     'data.name',
     'data.clientName',
     'data.client_name',
-    'fields.name',
-    'fields.clientName'
+    'data.fullname',
+    'data.full_name',
+    'data.first_name',
+
+    'data.form_data.name.value',
+    'form_data.name.value'
   ], '');
 
   const fromField = findFieldValue(payload, [
-    /(^|\.|\s)(имя|ваше имя|клиент|client_name|clientName|fullname|full_name)($|\.|\s)/i
+    /^имя/i,
+    /ваше имя/i,
+    /client.*name/i,
+    /fullname/i,
+    /full_name/i,
+    /form_data\.name/i
   ]);
 
   return titleCaseName(direct) || titleCaseName(fromField) || 'Клиент';
 }
 
 function getSiteRepairSubject(payload) {
-  const formText = findFormTextInPayload(payload);
-
-  if (formText) {
-    const extracted = extractRepairSubjectFromText(formText);
-    if (extracted) return extracted;
-  }
-
   const device = findFieldValue(payload, [
     /тип.*устрой/i,
     /устройство/i,
     /инструмент/i,
     /device/i,
-    /tool/i
+    /tool/i,
+    /fld_2/i
   ]);
 
   const problem = findFieldValue(payload, [
@@ -1235,7 +903,8 @@ function getSiteRepairSubject(payload) {
     /проблем/i,
     /problem/i,
     /issue/i,
-    /malfunction/i
+    /malfunction/i,
+    /fld_3/i
   ]);
 
   const comment = findFieldValue(payload, [
@@ -1244,7 +913,8 @@ function getSiteRepairSubject(payload) {
     /описан/i,
     /comment/i,
     /message/i,
-    /description/i
+    /description/i,
+    /fld_4/i
   ]);
 
   const lines = [];
@@ -1255,7 +925,7 @@ function getSiteRepairSubject(payload) {
 
   if (lines.length) return lines.join('\n');
 
-  const direct = pick(payload, [
+  return String(pick(payload, [
     'comment',
     'message',
     'description',
@@ -1265,147 +935,16 @@ function getSiteRepairSubject(payload) {
     'data.message',
     'data.description',
     'data.text'
-  ], '');
-
-  if (direct) return extractRepairSubjectFromText(direct);
-
-  return 'Новая заявка с сайта';
+  ], 'Новая заявка с сайта')).trim();
 }
 
-function getRoLeadClientName(payload) {
-  return titleCaseName(pick(payload, [
-    'metadata.client.fullname',
-    'metadata.client.full_name',
-    'metadata.client.name',
-    'metadata.client.first_name',
-    'client.fullname',
-    'client.full_name',
-    'client.name',
-    'client.first_name',
-    'data.client.fullname',
-    'data.client.full_name',
-    'data.client.name',
-    'data.client.first_name'
-  ], ''));
-}
-
-function getRoLeadSubject(payload) {
-  const text = findFormTextInPayload(payload);
-
-  if (text) {
-    const extracted = extractRepairSubjectFromText(text);
-    if (extracted) return extracted;
-  }
-
-  const direct = pick(payload, [
-    'metadata.lead.comment',
-    'metadata.lead.description',
-    'metadata.lead.text',
-    'metadata.lead.message',
-    'lead.comment',
-    'lead.description',
-    'lead.text',
-    'lead.message',
-    'data.lead.comment',
-    'data.lead.description',
-    'data.lead.text',
-    'data.lead.message',
-    'comment',
-    'description',
-    'message',
-    'text'
-  ], '');
-
-  if (direct && !/^\d+$/.test(String(direct).trim())) {
-    return extractRepairSubjectFromText(direct);
-  }
-
-  const leadName = String(pick(payload, [
-    'metadata.lead.name',
-    'lead.name',
-    'data.lead.name'
-  ], '')).trim();
-
-  if (leadName && !/^\d+$/.test(leadName)) {
-    return leadName;
-  }
-
-  return '';
-}
-
-async function sendRepairRequestAlert({ clientName, clientPhone, subject }) {
-  const normalizedPhone = normalizePhone(clientPhone);
-  const waLink = normalizedPhone ? `https://wa.me/${normalizedPhone}` : 'Телефон не найден';
-
-  await sendTemplate(MANAGER_WHATSAPP, 'new_repair_request_alert', [
-    clientName || 'Клиент',
-    normalizedPhone ? prettyPhone(normalizedPhone) : 'не указан',
-    subject || 'Новая заявка с сайта',
-    waLink
-  ]);
-
-  log('Repair request alert sent to manager', {
-    clientName,
-    clientPhone: normalizedPhone || '',
-    hasPhone: Boolean(normalizedPhone)
-  });
-}
-
-async function handleSiteRepairRequest(payload) {
-  log('Site repair request raw payload:', compactPayloadPreview(payload));
-
-  const clientName = getSiteClientName(payload);
-  const clientPhone = findFirstPhone(payload);
-  const subject = getSiteRepairSubject(payload);
-
-  log('Site repair request received:', {
-    clientName,
-    clientPhone: clientPhone || '',
-    subject
-  });
-
-  await sendRepairRequestAlert({
-    clientName,
-    clientPhone,
-    subject
-  });
-
-  return {
-    ok: true,
-    clientName,
-    clientPhone,
-    subject
-  };
-}
-
-async function handleRoRepairRequest(payload) {
-  const clientName = getRoLeadClientName(payload) || getClientName(payload);
-  const clientPhone = findFirstPhone(payload);
-  const subject = getRoLeadSubject(payload);
-
-  if (!clientPhone && !subject) {
-    log('RO lead has no phone and no useful comment. Skipped. Use /site-repair-request for full website form data.');
-    log('RO lead payload preview:', compactPayloadPreview(payload));
-    return {
-      ok: true,
-      skipped: true,
-      reason: 'no phone and no useful comment'
-    };
-  }
-
-  await sendRepairRequestAlert({
-    clientName,
-    clientPhone,
-    subject: subject || 'Новое обращение в РемОнлайн'
-  });
-
-  return {
-    ok: true,
-    skipped: false,
-    clientName,
-    clientPhone,
-    subject
-  };
+function cleanTemplateParam(value) {
+  return String(value ?? '')
+    .replace(/[\r\n\t]+/g, ' | ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\|\s*\|/g, '|')
+    .trim()
+    .slice(0, 1000);
 }
 
 async function metaRequest(path, body) {
@@ -1441,29 +980,6 @@ async function metaRequest(path, body) {
   return data;
 }
 
-async function sendWhatsAppText(to, text) {
-  const body = {
-    messaging_product: 'whatsapp',
-    to: normalizePhone(to),
-    type: 'text',
-    text: {
-      preview_url: true,
-      body: text
-    }
-  };
-
-  return metaRequest(`${WHATSAPP_PHONE_NUMBER_ID}/messages`, body);
-}
-
-function cleanTemplateParam(value) {
-  return String(value ?? '')
-    .replace(/[\r\n\t]+/g, ' | ')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/\|\s*\|/g, '|')
-    .trim()
-    .slice(0, 1000);
-}
-
 async function sendTemplate(to, name, parameters = []) {
   const bodyParams = parameters.map((text) => ({
     type: 'text',
@@ -1493,6 +1009,20 @@ async function sendTemplate(to, name, parameters = []) {
   return metaRequest(`${WHATSAPP_PHONE_NUMBER_ID}/messages`, body);
 }
 
+async function sendText(to, text) {
+  const body = {
+    messaging_product: 'whatsapp',
+    to: normalizePhone(to),
+    type: 'text',
+    text: {
+      preview_url: true,
+      body: text
+    }
+  };
+
+  return metaRequest(`${WHATSAPP_PHONE_NUMBER_ID}/messages`, body);
+}
+
 function autoReplyText() {
   return [
     'Здравствуйте. Это автоматический номер MasterProServis.kz для уведомлений по заказам.',
@@ -1502,59 +1032,95 @@ function autoReplyText() {
   ].join('\n');
 }
 
-async function handleOrderEvent(payload) {
-  const statusIdBeforeApi = getNewStatusId(payload);
+async function handleSiteRepairRequest(payload) {
+  const clientName = getSiteClientName(payload);
+  const clientPhone = findFirstPhone(payload);
+  const subject = getSiteRepairSubject(payload);
+  const waLink = clientPhone ? `https://wa.me/${clientPhone}` : 'Телефон не найден';
 
-  if (INTERNAL_STATUS_IDS.has(statusIdBeforeApi)) {
-    log('Internal status, skip WhatsApp:', statusIdBeforeApi);
+  log('Site repair request:', {
+    clientName,
+    clientPhone,
+    subject
+  });
+
+  await sendTemplate(MANAGER_WHATSAPP, TEMPLATE_SITE_REQUEST, [
+    clientName,
+    clientPhone ? prettyPhone(clientPhone) : 'не указан',
+    subject,
+    waLink
+  ]);
+
+  log('new_repair_request_alert sent to manager:', {
+    clientName,
+    clientPhone
+  });
+
+  return {
+    clientName,
+    clientPhone,
+    subject
+  };
+}
+
+async function handleOrderEvent(payload) {
+  const statusIdFromWebhook = getNewStatusId(payload);
+
+  if (INTERNAL_STATUS_IDS.has(statusIdFromWebhook)) {
+    log('Internal status skipped:', statusIdFromWebhook);
     return;
   }
 
-  const enriched = await enrichRoOrderPayloadWithApi(payload);
+  const enriched = await enrichRoOrderPayload(payload);
   const fullPayload = enriched.payload;
-
   const clientPhone = enriched.phone || findFirstPhone(fullPayload);
 
   if (!clientPhone) {
-    log('No client phone found, skip WhatsApp template');
-    log('RemOnline payload preview:', compactPayloadPreview(fullPayload));
+    log('No client phone found, order skipped:', compactPayloadPreview(fullPayload));
+    return;
+  }
+
+  const statusId = statusIdFromWebhook || getNewStatusId(fullPayload);
+
+  if (INTERNAL_STATUS_IDS.has(statusId)) {
+    log('Internal status skipped after RO API:', statusId);
     return;
   }
 
   const clientName = getClientName(fullPayload);
   const orderNumber = getOrderNumber(fullPayload);
-  const status = getOrderStatus(fullPayload);
-  const statusId = statusIdBeforeApi || getNewStatusId(fullPayload);
-  const amountDebug = getOrderAmountDebug(fullPayload);
   const orderId = getRoOrderId(payload) || getRoOrderId(fullPayload);
+  const amount = getOrderAmount(fullPayload);
+  const status = getOrderStatus(fullPayload);
 
-  log('Order debug:', {
+  log('Order event:', {
     eventName: getEventName(payload),
-    statusId: statusId || null,
-    orderId: orderId || null,
+    orderId,
     orderNumber,
+    statusId,
+    status,
     clientName,
     clientPhone,
     phoneSource: enriched.source,
-    status,
-    amount: amountDebug.formatted,
-    amountSource: amountDebug.source
+    amount: amount.formatted,
+    amountSource: amount.source
   });
 
   if (isOrderReady(fullPayload)) {
-    await sendTemplate(clientPhone, 'order_ready', [
+    await sendTemplate(clientPhone, TEMPLATE_ORDER_READY, [
       clientName,
       orderNumber,
-      amountDebug.formatted
+      amount.formatted
     ]);
 
-    return log('order_ready sent', clientPhone, {
+    log('order_ready sent:', {
+      clientPhone,
       clientName,
       orderNumber,
-      statusId,
-      amount: amountDebug.formatted,
-      amountSource: amountDebug.source
+      amount: amount.formatted
     });
+
+    return;
   }
 
   if (isOrderClosed(fullPayload)) {
@@ -1563,42 +1129,39 @@ async function handleOrderEvent(payload) {
       clientPhone,
       clientName,
       orderNumber,
-      baseOrderData: fullPayload.ro_api_order
+      orderData: fullPayload.ro_api_order
     });
 
-    try {
-      await sendTemplate(clientPhone, 'order_review_request', [
-        clientName
-      ]);
+    await sendTemplate(clientPhone, TEMPLATE_ORDER_CLOSED_REVIEW, [clientName]);
 
-      log('order_review_request sent', clientPhone, {
-        clientName,
-        orderNumber,
-        statusId
-      });
-    } catch (err) {
-      console.error('order_review_request send error:', err.data || err.message || err);
-    }
+    log('order_review_request sent:', {
+      clientPhone,
+      clientName,
+      orderNumber
+    });
 
     return;
   }
 
   if (isOrderAccepted(fullPayload)) {
-    await sendTemplate(clientPhone, 'order_accepted', [
+    await sendTemplate(clientPhone, TEMPLATE_ORDER_ACCEPTED, [
       clientName,
       orderNumber
     ]);
 
-    return log('order_accepted sent', clientPhone, {
+    log('order_accepted sent:', {
+      clientPhone,
       clientName,
-      orderNumber,
-      statusId
+      orderNumber
     });
+
+    return;
   }
 
-  log('Unhandled/non-customer status, skip WhatsApp:', {
-    statusId: statusId || null,
+  log('Order status skipped:', {
+    orderId,
     orderNumber,
+    statusId,
     status
   });
 }
@@ -1606,12 +1169,7 @@ async function handleOrderEvent(payload) {
 function checkRoSecret(req) {
   if (!RO_SECRET) return true;
 
-  const provided =
-    req.query.secret ||
-    req.headers['x-ro-secret'] ||
-    req.headers['x-webhook-secret'] ||
-    req.headers['x-remonline-secret'];
-
+  const provided = req.query.secret || req.headers['x-ro-secret'] || req.headers['x-webhook-secret'] || req.headers['x-remonline-secret'];
   return String(provided || '') === RO_SECRET;
 }
 
@@ -1624,53 +1182,24 @@ app.get('/health', (req, res) => {
     wabaId: WABA_ID,
     roApiConfigured: Boolean(REMONLINE_API_KEY),
     templateLang: WHATSAPP_TEMPLATE_LANG,
-    readyStatusIds: [...READY_STATUS_IDS],
-    closedStatusIds: [...CLOSED_STATUS_IDS],
-    acceptedStatusIds: [...ACCEPTED_STATUS_IDS],
-    internalStatusIds: [...INTERNAL_STATUS_IDS],
-    receiptTemplateName: RECEIPT_TEMPLATE_NAME,
-    receiptSearchEnabled: RECEIPT_SEARCH_ENABLED,
-    receiptRetryMs: RECEIPT_RETRY_MS,
-    siteRepairRequestWebhook: '/site-repair-request'
-  });
-});
-
-app.get('/wa/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  if (mode === 'subscribe' && token === META_VERIFY_TOKEN) {
-    log('Meta webhook verified');
-    return res.status(200).send(challenge);
-  }
-
-  return res.sendStatus(403);
-});
-
-app.post('/wa/webhook', async (req, res) => {
-  res.sendStatus(200);
-
-  try {
-    const entries = req.body?.entry || [];
-
-    for (const entry of entries) {
-      for (const change of entry.changes || []) {
-        const value = change.value || {};
-
-        for (const msg of value.messages || []) {
-          const from = normalizePhone(msg.from);
-          if (!from) continue;
-
-          log('Incoming WhatsApp message from', from, 'type', msg.type);
-          await sendWhatsAppText(from, autoReplyText());
-          log('Auto-reply sent to', from);
-        }
-      }
+    templates: {
+      flexbe: TEMPLATE_SITE_REQUEST,
+      orderAccepted: TEMPLATE_ORDER_ACCEPTED,
+      orderReady: TEMPLATE_ORDER_READY,
+      orderClosedReview: TEMPLATE_ORDER_CLOSED_REVIEW,
+      orderReceipt: TEMPLATE_ORDER_RECEIPT
+    },
+    statuses: {
+      ready: [...READY_STATUS_IDS],
+      closed: [...CLOSED_STATUS_IDS],
+      accepted: [...ACCEPTED_STATUS_IDS],
+      internal: [...INTERNAL_STATUS_IDS]
+    },
+    endpoints: {
+      flexbeWebhook: '/site-repair-request',
+      remonlineWebhook: '/ro/webhook'
     }
-  } catch (err) {
-    console.error('WA webhook handling error:', err.data || err.message || err);
-  }
+  });
 });
 
 app.post('/site-repair-request', async (req, res) => {
@@ -1697,8 +1226,7 @@ app.get('/site-repair-request', (req, res) => {
   res.json({
     ok: true,
     endpoint: '/site-repair-request',
-    method: 'POST',
-    message: 'Flexbe webhook should send form data here.'
+    method: 'POST'
   });
 });
 
@@ -1719,285 +1247,59 @@ app.post('/ro/webhook', async (req, res) => {
 
   try {
     const eventName = getEventName(payload) || 'unknown';
-    log('RemOnline webhook event:', eventName);
+    const objectType = String(pick(payload, ['context.object_type'], '')).toLowerCase();
 
-    if (isRepairRequestCreated(payload)) {
-      return await handleRoRepairRequest(payload);
+    log('RemOnline webhook event:', eventName, { objectType });
+
+    if (isLeadPayload(payload)) {
+      log('RemOnline lead/request ignored. Flexbe sends repair requests via /site-repair-request.');
+      return;
     }
 
-    if (isOrderCreated(payload) || isOrderRelatedPayload(payload) || isOrderAccepted(payload)) {
-      return await handleOrderEvent(payload);
+    if (isOrderCreated(payload) || isOrderRelatedPayload(payload)) {
+      await handleOrderEvent(payload);
+      return;
     }
 
-    log('No matching RemOnline rule, skipped');
-    log('RemOnline payload preview:', compactPayloadPreview(payload));
+    log('RemOnline webhook skipped: not an order event.');
   } catch (err) {
     console.error('RO webhook handling error:', err.data || err.message || err);
   }
 });
 
-app.get('/test-send', async (req, res) => {
-  try {
-    const to = normalizePhone(req.query.to || MANAGER_WHATSAPP);
-    const text = String(req.query.text || 'Тестовый ответ от MasterProServis.kz. API-номер работает.');
-    const data = await sendWhatsAppText(to, text);
+app.get('/wa/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
 
-    res.json({
-      ok: true,
-      data
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-      meta: err.data
-    });
+  if (mode === 'subscribe' && token === META_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
   }
+
+  return res.sendStatus(403);
 });
 
-function defaultTemplateParams(template) {
-  const params = {
-    new_repair_request_alert: [
-      'Павел',
-      '+77076669955',
-      'Тип устройства: Перфоратор\nНеисправность: Не реагирует на кнопку\nКомментарий: тест',
-      'https://wa.me/77076669955'
-    ],
-    order_accepted: [
-      'Павел',
-      'B4582'
-    ],
-    order_ready: [
-      'Павел',
-      'B4582',
-      '123 ₸'
-    ],
-    order_review_request: [
-      'Павел'
-    ],
-    order_closed_receipt: [
-      'Павел',
-      'B4582',
-      'https://c13xs.roapp.page/w/test/'
-    ]
-  };
+app.post('/wa/webhook', async (req, res) => {
+  res.sendStatus(200);
 
-  return params[template] || ['Павел'];
-}
-
-app.get('/test-template', async (req, res) => {
   try {
-    const to = normalizePhone(req.query.to || MANAGER_WHATSAPP);
-    const template = String(req.query.template || 'order_ready');
+    const entries = req.body?.entry || [];
 
-    const manualParams = [];
+    for (const entry of entries) {
+      for (const change of entry.changes || []) {
+        const value = change.value || {};
 
-    for (let i = 1; i <= 10; i += 1) {
-      const value = req.query[`p${i}`];
-      if (value !== undefined) manualParams.push(String(value));
+        for (const message of value.messages || []) {
+          const from = normalizePhone(message.from);
+          if (!from) continue;
+
+          await sendText(from, autoReplyText());
+          log('Auto reply sent:', from);
+        }
+      }
     }
-
-    const params = manualParams.length ? manualParams : defaultTemplateParams(template);
-    const data = await sendTemplate(to, template, params);
-
-    res.json({
-      ok: true,
-      template,
-      params,
-      data
-    });
   } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-      meta: err.data
-    });
-  }
-});
-
-app.get('/test-site-request', async (req, res) => {
-  try {
-    const payload = {
-      name: req.query.name || 'Павел',
-      phone: req.query.phone || '77076669955',
-      device: req.query.device || 'Перфоратор',
-      problem: req.query.problem || 'Не реагирует на кнопку',
-      comment: req.query.comment || 'Тестовая заявка'
-    };
-
-    const result = await handleSiteRepairRequest(payload);
-
-    res.json({
-      ok: true,
-      payload,
-      result
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-      meta: err.data
-    });
-  }
-});
-
-app.get('/debug-order-amount', async (req, res) => {
-  try {
-    const orderId = String(req.query.orderId || '');
-
-    if (!orderId) {
-      return res.status(400).json({
-        ok: false,
-        error: 'orderId is required'
-      });
-    }
-
-    const order = await fetchRoOrder(orderId);
-    const amountDebug = getOrderAmountDebug({ ro_api_order: order });
-
-    res.json({
-      ok: true,
-      orderId,
-      amount: amountDebug.formatted,
-      amountSource: amountDebug.source,
-      candidates: amountDebug.candidates,
-      order
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-      status: err.status,
-      data: err.data
-    });
-  }
-});
-
-app.get('/debug-receipt', async (req, res) => {
-  try {
-    const orderId = String(req.query.orderId || '');
-
-    if (!orderId) {
-      return res.status(400).json({
-        ok: false,
-        error: 'orderId is required'
-      });
-    }
-
-    const order = await fetchRoOrder(orderId);
-    const result = await findReceiptLink(orderId, order);
-
-    res.json({
-      ok: true,
-      orderId,
-      receiptUrl: result.link,
-      candidates: result.candidates,
-      sourcesChecked: result.sourcesChecked
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-      status: err.status,
-      data: err.data
-    });
-  }
-});
-
-app.get('/send-receipt', async (req, res) => {
-  try {
-    const orderId = String(req.query.orderId || '');
-    const forcedTo = normalizePhone(req.query.to || '');
-
-    if (!orderId) {
-      return res.status(400).json({
-        ok: false,
-        error: 'orderId is required'
-      });
-    }
-
-    const order = await fetchRoOrder(orderId);
-    const payloadForOrder = { ro_api_order: order };
-    const receipt = await findReceiptLink(orderId, order);
-
-    if (!receipt.link) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Receipt link not found',
-        orderId,
-        candidates: receipt.candidates,
-        sourcesChecked: receipt.sourcesChecked
-      });
-    }
-
-    const clientPhone = forcedTo || findFirstPhone(order);
-
-    if (!clientPhone) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Client phone not found',
-        orderId,
-        receiptUrl: receipt.link
-      });
-    }
-
-    const clientName = getClientName(payloadForOrder);
-    const orderNumber = getOrderNumber(payloadForOrder);
-
-    const data = await sendTemplate(clientPhone, RECEIPT_TEMPLATE_NAME, [
-      clientName,
-      orderNumber,
-      receipt.link
-    ]);
-
-    receiptSent.add(orderId);
-
-    res.json({
-      ok: true,
-      orderId,
-      to: clientPhone,
-      clientName,
-      orderNumber,
-      receiptUrl: receipt.link,
-      data
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-      meta: err.data,
-      status: err.status,
-      data: err.data
-    });
-  }
-});
-
-app.get('/debug-ro-path', async (req, res) => {
-  try {
-    const path = String(req.query.path || '').trim();
-
-    if (!path) {
-      return res.status(400).json({
-        ok: false,
-        error: 'path is required'
-      });
-    }
-
-    const safePath = path.replace(/^\/+/, '');
-    const data = await roApiGetRaw(`/${safePath}`);
-
-    res.json({
-      ok: true,
-      path: `/${safePath}`,
-      data
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-      status: err.status,
-      data: err.data
-    });
+    console.error('WA webhook error:', err.data || err.message || err);
   }
 });
 
