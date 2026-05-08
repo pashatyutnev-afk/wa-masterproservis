@@ -94,10 +94,7 @@ function looksLikeOrderNumber(value) {
   const text = String(value || '').trim();
   if (!text) return false;
 
-  return (
-    /^[A-Za-zА-Яа-я]\d{3,}$/.test(text) ||
-    /^\d{6,}$/.test(text)
-  );
+  return /^[A-Za-zА-Яа-я]\d{3,}$/.test(text) || /^\d{6,}$/.test(text);
 }
 
 function cleanClientName(value) {
@@ -108,6 +105,16 @@ function cleanClientName(value) {
   if (looksLikeOrderNumber(text)) return '';
 
   return text;
+}
+
+function titleCaseName(value) {
+  const text = cleanClientName(value);
+  if (!text) return '';
+
+  return text
+    .split(/\s+/)
+    .map((part) => part ? part[0].toUpperCase() + part.slice(1) : part)
+    .join(' ');
 }
 
 function findFirstPhone(obj) {
@@ -124,6 +131,16 @@ function findFirstPhone(obj) {
     'client.phones.0.value',
     'client.phones.0.normalized',
 
+    'data.client.phone',
+    'data.client.mobile',
+    'data.client.telephone',
+    'data.client.phone_number',
+    'data.client.phoneNumber',
+    'data.client.phone.0',
+    'data.client.phones.0.phone',
+    'data.client.phones.0.number',
+    'data.client.phones.0.value',
+
     'metadata.client.phone',
     'metadata.client.mobile',
     'metadata.client.phone_number',
@@ -132,42 +149,6 @@ function findFirstPhone(obj) {
     'metadata.client.phones.0.phone',
     'metadata.client.phones.0.number',
     'metadata.client.phones.0.value',
-
-    'client_phone',
-    'phone',
-    'mobile',
-    'telephone',
-    'phone_number',
-    'phoneNumber',
-    'whatsapp',
-
-    'customer.phone',
-    'customer.mobile',
-    'customer.telephone',
-    'customer.phone_number',
-    'customer.phoneNumber',
-    'customer.phones.0.phone',
-    'customer.phones.0.number',
-    'customer.phones.0.value',
-    'customer_phone',
-
-    'lead.phone',
-    'lead.mobile',
-    'lead.phone_number',
-    'lead.client.phone',
-    'lead.client.mobile',
-    'lead.client.phone_number',
-
-    'metadata.lead.phone',
-    'metadata.lead.mobile',
-    'metadata.lead.phone_number',
-    'metadata.lead.client.phone',
-    'metadata.lead.client.mobile',
-    'metadata.lead.client.phone_number',
-
-    'appeal.phone',
-    'appeal.mobile',
-    'appeal.phone_number',
 
     'order.client.phone',
     'order.client.mobile',
@@ -179,34 +160,6 @@ function findFirstPhone(obj) {
     'order.client.phones.0.number',
     'order.client.phones.0.value',
 
-    'data.client.phone',
-    'data.client.mobile',
-    'data.client.telephone',
-    'data.client.phone_number',
-    'data.client.phoneNumber',
-    'data.client.phone.0',
-    'data.client.phones.0.phone',
-    'data.client.phones.0.number',
-    'data.client.phones.0.value',
-
-    'data.phone',
-    'data.mobile',
-    'data.phone_number',
-
-    'data.customer.phone',
-    'data.customer.mobile',
-    'data.customer.phone_number',
-
-    'contact.phone',
-    'contact.mobile',
-    'contact.phone_number',
-    'contact.phoneNumber',
-
-    'ro_api_order.phone.0',
-    'ro_api_order.phone',
-    'ro_api_order.mobile',
-    'ro_api_order.phone_number',
-
     'ro_api_order.client.phone',
     'ro_api_order.client.mobile',
     'ro_api_order.client.phone_number',
@@ -215,6 +168,14 @@ function findFirstPhone(obj) {
     'ro_api_order.client.phones.0.phone',
     'ro_api_order.client.phones.0.number',
     'ro_api_order.client.phones.0.value',
+
+    'ro_api_order.data.client.phone',
+    'ro_api_order.data.client.mobile',
+    'ro_api_order.data.client.phone_number',
+    'ro_api_order.data.client.phone.0',
+    'ro_api_order.data.client.phones.0.phone',
+    'ro_api_order.data.client.phones.0.number',
+    'ro_api_order.data.client.phones.0.value',
 
     'ro_api_client.phone.0',
     'ro_api_client.phone',
@@ -225,17 +186,14 @@ function findFirstPhone(obj) {
     'ro_api_client.phones.0.number',
     'ro_api_client.phones.0.value',
 
-    'ro_api_lead.client.phone',
-    'ro_api_lead.client.mobile',
-    'ro_api_lead.client.phone_number',
-    'ro_api_lead.client.phoneNumber',
-    'ro_api_lead.client.phone.0',
-    'ro_api_lead.client.phones.0.phone',
-    'ro_api_lead.client.phones.0.number',
-    'ro_api_lead.client.phones.0.value',
-    'ro_api_lead.phone',
-    'ro_api_lead.mobile',
-    'ro_api_lead.phone_number'
+    'phone',
+    'mobile',
+    'telephone',
+    'phone_number',
+    'phoneNumber',
+    'whatsapp',
+    'client_phone',
+    'customer_phone'
   ]);
 
   const normalizedDirect = looksLikePhone(direct);
@@ -301,7 +259,10 @@ function getRoOrderId(payload) {
     'context.object_id',
     'data.object_id',
     'rel_obj.id',
-    'ro_api_order.id'
+    'ro_api_order.id',
+    'ro_api_order.data.id',
+    'ro_api_order.order.id',
+    'ro_api_order.data.order.id'
   ]);
 }
 
@@ -340,6 +301,8 @@ function getRoClientId(payload) {
 
     'ro_api_order.client.id',
     'ro_api_order.client_id',
+    'ro_api_order.data.client.id',
+    'ro_api_order.data.client_id',
     'ro_api_client.id'
   ]);
 }
@@ -354,7 +317,10 @@ function getNewStatusId(payload) {
     'order.status.id',
     'data.status.id',
     'data.order.status.id',
-    'ro_api_order.status.id'
+    'ro_api_order.status.id',
+    'ro_api_order.data.status.id',
+    'ro_api_order.order.status.id',
+    'ro_api_order.data.order.status.id'
   ], '')).trim();
 }
 
@@ -371,15 +337,12 @@ function unwrapRoResponse(data) {
 
   if (data.data && typeof data.data === 'object') return data.data;
   if (data.result && typeof data.result === 'object') return data.result;
-  if (data.order && typeof data.order === 'object') return data.order;
-  if (data.client && typeof data.client === 'object') return data.client;
-  if (data.lead && typeof data.lead === 'object') return data.lead;
   if (data.item && typeof data.item === 'object') return data.item;
 
   return data;
 }
 
-async function roApiGet(path) {
+async function roApiGetRaw(path) {
   if (!REMONLINE_API_KEY) {
     throw new Error('REMONLINE_API_KEY is empty');
   }
@@ -411,15 +374,20 @@ async function roApiGet(path) {
     throw err;
   }
 
-  return unwrapRoResponse(data);
+  return data;
 }
 
-async function tryRoApiPaths(paths, label) {
+async function roApiGet(path) {
+  const raw = await roApiGetRaw(path);
+  return unwrapRoResponse(raw);
+}
+
+async function tryRoApiPaths(paths, label, options = {}) {
   let lastErr = null;
 
   for (const path of paths) {
     try {
-      const data = await roApiGet(path);
+      const data = options.raw ? await roApiGetRaw(path) : await roApiGet(path);
       log(`RO API ${label} success:`, path);
       return data;
     } catch (err) {
@@ -440,7 +408,7 @@ async function fetchRoOrder(orderId) {
     `/orders/${orderId}?include=client`,
     `/orders/${orderId}?expand=client`,
     `/orders/${orderId}?with=client`
-  ], `order ${orderId}`);
+  ], `order ${orderId}`, { raw: true });
 }
 
 async function fetchRoLead(leadId) {
@@ -640,7 +608,9 @@ function getClientName(payload) {
   const firstName = pick(payload, [
     'ro_api_client.first_name',
     'ro_api_order.first_name',
+    'ro_api_order.data.first_name',
     'ro_api_order.client.first_name',
+    'ro_api_order.data.client.first_name',
     'ro_api_lead.client.first_name',
 
     'metadata.client.first_name',
@@ -657,9 +627,15 @@ function getClientName(payload) {
     'ro_api_order.name',
     'ro_api_order.fullname',
     'ro_api_order.full_name',
+    'ro_api_order.data.name',
+    'ro_api_order.data.fullname',
+    'ro_api_order.data.full_name',
     'ro_api_order.client.name',
     'ro_api_order.client.fullname',
     'ro_api_order.client.full_name',
+    'ro_api_order.data.client.name',
+    'ro_api_order.data.client.fullname',
+    'ro_api_order.data.client.full_name',
 
     'ro_api_lead.client.name',
     'ro_api_lead.client.fullname',
@@ -694,7 +670,7 @@ function getClientName(payload) {
     'name'
   ], '');
 
-  return cleanClientName(firstName) || cleanClientName(fullName) || 'Клиент';
+  return titleCaseName(firstName) || titleCaseName(fullName) || 'Клиент';
 }
 
 function getRepairSubject(payload) {
@@ -742,7 +718,11 @@ function getRepairSubject(payload) {
     'ro_api_order.device',
     'ro_api_order.type',
     'ro_api_order.comment',
-    'ro_api_order.description'
+    'ro_api_order.description',
+    'ro_api_order.data.device',
+    'ro_api_order.data.type',
+    'ro_api_order.data.comment',
+    'ro_api_order.data.description'
   ], 'Новое обращение')).trim();
 }
 
@@ -752,12 +732,17 @@ function getOrderNumber(payload) {
     'order.name',
     'data.order.name',
     'ro_api_order.order.name',
+    'ro_api_order.data.order.name',
     'ro_api_order.number',
+    'ro_api_order.data.number',
+    'ro_api_order.name',
+    'ro_api_order.data.name',
 
     'metadata.order.number',
     'order.number',
     'data.order.number',
     'ro_api_order.order.number',
+    'ro_api_order.data.order.number',
 
     'metadata.order.id',
     'order.id',
@@ -767,7 +752,9 @@ function getOrderNumber(payload) {
     'data.order.id',
     'data.id',
     'ro_api_order.order.id',
-    'ro_api_order.id'
+    'ro_api_order.data.order.id',
+    'ro_api_order.id',
+    'ro_api_order.data.id'
   ], 'Без номера')).trim();
 }
 
@@ -798,12 +785,113 @@ function getOrderStatus(payload) {
     'metadata.new.status.title',
     'ro_api_order.status.name',
     'ro_api_order.status.title',
-    'ro_api_order.status'
+    'ro_api_order.status',
+    'ro_api_order.data.status.name',
+    'ro_api_order.data.status.title',
+    'ro_api_order.data.status'
   ], 'Статус изменён')).trim();
 }
 
-function getOrderAmount(payload) {
-  const amount = pick(payload, [
+function parseMoneyValue(value) {
+  if (value === null || value === undefined) return null;
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    return value;
+  }
+
+  const text = String(value).trim();
+  if (!text) return null;
+
+  const normalized = text
+    .replace(/\s/g, '')
+    .replace(/[₸〒тгKZTkzt]/g, '')
+    .replace(',', '.');
+
+  if (!/^-?\d+(\.\d+)?$/.test(normalized)) return null;
+
+  const num = Number(normalized);
+  if (!Number.isFinite(num)) return null;
+  return num;
+}
+
+function moneyLooksBadPath(path) {
+  return /id|phone|телефон|status|статус|number|номер|barcode|code|код|date|time|timestamp|created|updated|client|customer|employee|user|manager/i.test(path);
+}
+
+function moneyLooksGoodPath(path) {
+  return /total|sum|amount|price|cost|paid|payed|payment|balance|debt|due|to_pay|payable|grand|final|subtotal|work|service|goods|item|product|parts|materials|profit|estimated/i.test(path);
+}
+
+function formatMoney(num) {
+  if (num === null || num === undefined || !Number.isFinite(num)) return '';
+  const rounded = Math.round(num * 100) / 100;
+
+  if (Math.abs(rounded - Math.round(rounded)) < 0.001) {
+    return String(Math.round(rounded));
+  }
+
+  return rounded.toFixed(2).replace('.', ',');
+}
+
+function getDirectAmountCandidate(payload) {
+  const paths = [
+    'ro_api_order.total',
+    'ro_api_order.sum',
+    'ro_api_order.amount',
+    'ro_api_order.price',
+    'ro_api_order.cost',
+    'ro_api_order.final_sum',
+    'ro_api_order.total_sum',
+    'ro_api_order.grand_total',
+    'ro_api_order.to_pay',
+    'ro_api_order.payable',
+    'ro_api_order.balance',
+    'ro_api_order.debt',
+    'ro_api_order.estimated_cost',
+
+    'ro_api_order.data.total',
+    'ro_api_order.data.sum',
+    'ro_api_order.data.amount',
+    'ro_api_order.data.price',
+    'ro_api_order.data.cost',
+    'ro_api_order.data.final_sum',
+    'ro_api_order.data.total_sum',
+    'ro_api_order.data.grand_total',
+    'ro_api_order.data.to_pay',
+    'ro_api_order.data.payable',
+    'ro_api_order.data.balance',
+    'ro_api_order.data.debt',
+    'ro_api_order.data.estimated_cost',
+
+    'ro_api_order.order.total',
+    'ro_api_order.order.sum',
+    'ro_api_order.order.amount',
+    'ro_api_order.order.price',
+    'ro_api_order.order.cost',
+    'ro_api_order.order.final_sum',
+    'ro_api_order.order.total_sum',
+    'ro_api_order.order.grand_total',
+    'ro_api_order.order.to_pay',
+    'ro_api_order.order.payable',
+    'ro_api_order.order.balance',
+    'ro_api_order.order.debt',
+    'ro_api_order.order.estimated_cost',
+
+    'ro_api_order.data.order.total',
+    'ro_api_order.data.order.sum',
+    'ro_api_order.data.order.amount',
+    'ro_api_order.data.order.price',
+    'ro_api_order.data.order.cost',
+    'ro_api_order.data.order.final_sum',
+    'ro_api_order.data.order.total_sum',
+    'ro_api_order.data.order.grand_total',
+    'ro_api_order.data.order.to_pay',
+    'ro_api_order.data.order.payable',
+    'ro_api_order.data.order.balance',
+    'ro_api_order.data.order.debt',
+    'ro_api_order.data.order.estimated_cost',
+
     'amount',
     'total',
     'price',
@@ -819,27 +907,194 @@ function getOrderAmount(payload) {
     'data.total',
     'data.amount',
     'data.price',
-    'data.sum',
-    'ro_api_order.total',
-    'ro_api_order.amount',
-    'ro_api_order.price',
-    'ro_api_order.sum',
-    'ro_api_order.payed',
-    'ro_api_order.estimated_cost',
-    'ro_api_order.order.total',
-    'ro_api_order.order.amount',
-    'ro_api_order.order.price',
-    'ro_api_order.order.sum'
-  ], '');
+    'data.sum'
+  ];
 
-  const currency = pick(payload, [
-    'currency',
-    'order.currency',
-    'data.currency',
-    'ro_api_order.currency'
-  ], '₸');
+  for (const path of paths) {
+    const raw = pick(payload, [path], '');
+    const parsed = parseMoneyValue(raw);
 
-  return amount ? `${amount} ${currency}` : 'уточняется';
+    if (parsed !== null && parsed >= 0 && parsed < 100000000) {
+      return {
+        value: parsed,
+        source: path,
+        raw
+      };
+    }
+  }
+
+  return null;
+}
+
+function findMoneyCandidates(obj) {
+  const candidates = [];
+
+  function walk(node, path = '', depth = 0) {
+    if (node == null || depth > 12) return;
+
+    if (typeof node === 'number' || typeof node === 'string') {
+      const value = parseMoneyValue(node);
+
+      if (
+        value !== null &&
+        value >= 0 &&
+        value < 100000000 &&
+        !moneyLooksBadPath(path) &&
+        moneyLooksGoodPath(path)
+      ) {
+        candidates.push({
+          path,
+          value,
+          raw: node
+        });
+      }
+
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
+      return;
+    }
+
+    if (typeof node === 'object') {
+      for (const [key, value] of Object.entries(node)) {
+        walk(value, path ? `${path}.${key}` : key, depth + 1);
+      }
+    }
+  }
+
+  walk(obj);
+
+  return candidates
+    .sort((a, b) => {
+      const aPriority = /to_pay|payable|balance|debt|grand_total|final|total_sum|total|sum|amount|price/i.test(a.path) ? 0 : 1;
+      const bPriority = /to_pay|payable|balance|debt|grand_total|final|total_sum|total|sum|amount|price/i.test(b.path) ? 0 : 1;
+
+      if (aPriority !== bPriority) return aPriority - bPriority;
+      return String(a.path).localeCompare(String(b.path));
+    })
+    .slice(0, 50);
+}
+
+function computeAmountFromLineItems(payload) {
+  const arrays = [];
+
+  function walk(node, path = '', depth = 0) {
+    if (node == null || depth > 10) return;
+
+    if (Array.isArray(node)) {
+      if (/items|goods|services|works|parts|materials|products|positions|rows|lines|jobs|work/i.test(path)) {
+        arrays.push({
+          path,
+          items: node
+        });
+      }
+
+      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
+      return;
+    }
+
+    if (typeof node === 'object') {
+      for (const [key, value] of Object.entries(node)) {
+        walk(value, path ? `${path}.${key}` : key, depth + 1);
+      }
+    }
+  }
+
+  walk(payload);
+
+  for (const arr of arrays) {
+    let total = 0;
+    let used = 0;
+
+    for (const item of arr.items) {
+      if (!item || typeof item !== 'object') continue;
+
+      const direct = getDirectAmountCandidate({ ro_api_order: item }) || getDirectAmountCandidate(item);
+
+      if (direct && direct.value > 0) {
+        total += direct.value;
+        used += 1;
+        continue;
+      }
+
+      const price = parseMoneyValue(pick(item, [
+        'price',
+        'cost',
+        'amount',
+        'unit_price',
+        'sale_price',
+        'data.price',
+        'data.cost',
+        'data.amount',
+        'data.unit_price'
+      ], ''));
+
+      const qty = parseMoneyValue(pick(item, [
+        'quantity',
+        'qty',
+        'count',
+        'amount_count',
+        'data.quantity',
+        'data.qty',
+        'data.count'
+      ], 1));
+
+      if (price !== null && price > 0) {
+        total += price * (qty && qty > 0 ? qty : 1);
+        used += 1;
+      }
+    }
+
+    if (used > 0 && total > 0) {
+      return {
+        value: total,
+        source: `computed:${arr.path}`,
+        used
+      };
+    }
+  }
+
+  return null;
+}
+
+function getOrderAmountDebug(payload) {
+  const direct = getDirectAmountCandidate(payload);
+
+  if (direct) {
+    return {
+      value: direct.value,
+      formatted: `${formatMoney(direct.value)} ₸`,
+      source: direct.source,
+      raw: direct.raw,
+      candidates: findMoneyCandidates(payload)
+    };
+  }
+
+  const computed = computeAmountFromLineItems(payload);
+
+  if (computed) {
+    return {
+      value: computed.value,
+      formatted: `${formatMoney(computed.value)} ₸`,
+      source: computed.source,
+      raw: null,
+      candidates: findMoneyCandidates(payload)
+    };
+  }
+
+  return {
+    value: null,
+    formatted: 'уточняется',
+    source: 'not_found',
+    raw: null,
+    candidates: findMoneyCandidates(payload)
+  };
+}
+
+function getOrderAmount(payload) {
+  return getOrderAmountDebug(payload).formatted;
 }
 
 function isLeadCreated(payload) {
@@ -1137,6 +1392,7 @@ async function handleOrderEvent(payload) {
   const orderNumber = getOrderNumber(fullPayload);
   const status = getOrderStatus(fullPayload);
   const statusId = statusIdBeforeApi || getNewStatusId(fullPayload);
+  const amountDebug = getOrderAmountDebug(fullPayload);
 
   log('Order status debug:', {
     eventName: getEventName(payload),
@@ -1144,17 +1400,25 @@ async function handleOrderEvent(payload) {
     orderId: getRoOrderId(payload) || null,
     orderNumber,
     clientName,
-    status
+    status,
+    amount: amountDebug.formatted,
+    amountSource: amountDebug.source
   });
 
   if (isOrderReady(fullPayload)) {
     await sendTemplate(clientPhone, 'order_ready', [
       clientName,
       orderNumber,
-      getOrderAmount(fullPayload)
+      amountDebug.formatted
     ]);
 
-    return log('order_ready sent', clientPhone, { clientName, orderNumber, statusId });
+    return log('order_ready sent', clientPhone, {
+      clientName,
+      orderNumber,
+      statusId,
+      amount: amountDebug.formatted,
+      amountSource: amountDebug.source
+    });
   }
 
   if (isOrderClosed(fullPayload)) {
@@ -1249,7 +1513,7 @@ function defaultTemplateParams(template) {
     order_ready: [
       'Павел',
       'B4582',
-      'уточняется'
+      '123 ₸'
     ],
     order_review_request: [
       'Павел'
@@ -1331,15 +1595,25 @@ app.get('/test-ro', async (req, res) => {
       phoneFromClient: '',
       guessedClientNameFromOrder: '',
       orderStatusId: '',
-      orderStatus: ''
+      orderStatus: '',
+      orderAmount: 'уточняется',
+      orderAmountSource: '',
+      orderAmountCandidates: []
     };
 
     if (orderId) {
       result.order = await fetchRoOrder(orderId);
+      const payloadForOrder = { ro_api_order: result.order };
+
       result.phoneFromOrder = findFirstPhone(result.order);
-      result.guessedClientNameFromOrder = getClientName({ ro_api_order: result.order });
-      result.orderStatusId = getNewStatusId({ ro_api_order: result.order });
-      result.orderStatus = getOrderStatus({ ro_api_order: result.order });
+      result.guessedClientNameFromOrder = getClientName(payloadForOrder);
+      result.orderStatusId = getNewStatusId(payloadForOrder);
+      result.orderStatus = getOrderStatus(payloadForOrder);
+
+      const amountDebug = getOrderAmountDebug(payloadForOrder);
+      result.orderAmount = amountDebug.formatted;
+      result.orderAmountSource = amountDebug.source;
+      result.orderAmountCandidates = amountDebug.candidates;
     }
 
     if (leadId) {
@@ -1353,6 +1627,38 @@ app.get('/test-ro', async (req, res) => {
     }
 
     res.json(result);
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+      status: err.status,
+      data: err.data
+    });
+  }
+});
+
+app.get('/debug-order-amount', async (req, res) => {
+  try {
+    const orderId = String(req.query.orderId || '');
+
+    if (!orderId) {
+      return res.status(400).json({
+        ok: false,
+        error: 'orderId is required'
+      });
+    }
+
+    const order = await fetchRoOrder(orderId);
+    const amountDebug = getOrderAmountDebug({ ro_api_order: order });
+
+    res.json({
+      ok: true,
+      orderId,
+      amount: amountDebug.formatted,
+      amountSource: amountDebug.source,
+      candidates: amountDebug.candidates,
+      order
+    });
   } catch (err) {
     res.status(500).json({
       ok: false,
