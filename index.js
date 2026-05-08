@@ -2218,7 +2218,35 @@ app.get('/send-receipt', async (req, res) => {
     });
   }
 });
+app.get('/debug-ro-path', async (req, res) => {
+  try {
+    const path = String(req.query.path || '').trim();
 
+    if (!path) {
+      return res.status(400).json({
+        ok: false,
+        error: 'path is required'
+      });
+    }
+
+    const safePath = path.replace(/^\/+/, '');
+
+    const data = await roApiGetRaw(`/${safePath}`);
+
+    res.json({
+      ok: true,
+      path: `/${safePath}`,
+      data
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+      status: err.status,
+      data: err.data
+    });
+  }
+});
 app.use((req, res) => {
   res.status(404).json({
     ok: false,
