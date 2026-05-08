@@ -1453,10 +1453,19 @@ async function sendWhatsAppText(to, text) {
   return metaRequest(`${WHATSAPP_PHONE_NUMBER_ID}/messages`, body);
 }
 
+function cleanTemplateParam(value) {
+  return String(value ?? '')
+    .replace(/[\r\n\t]+/g, ' | ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\|\s*\|/g, '|')
+    .trim()
+    .slice(0, 1000);
+}
+
 async function sendTemplate(to, name, parameters = []) {
   const bodyParams = parameters.map((text) => ({
     type: 'text',
-    text: String(text ?? '')
+    text: cleanTemplateParam(text)
   }));
 
   const body = {
