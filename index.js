@@ -23,6 +23,7 @@ const REMONLINE_API_BASE_URL = (process.env.REMONLINE_API_BASE_URL || 'https://a
 const READY_STATUS_IDS = parseIdList(process.env.READY_STATUS_IDS || '363629');
 const CLOSED_STATUS_IDS = parseIdList(process.env.CLOSED_STATUS_IDS || '');
 const ACCEPTED_STATUS_IDS = parseIdList(process.env.ACCEPTED_STATUS_IDS || '');
+const INTERNAL_STATUS_IDS = parseIdList(process.env.INTERNAL_STATUS_IDS || '');
 
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
@@ -97,21 +98,17 @@ function findFirstPhone(obj) {
     'client.phone_number',
     'client.phoneNumber',
     'client.whatsapp',
+    'client.phone.0',
     'client.phones.0.phone',
     'client.phones.0.number',
     'client.phones.0.value',
     'client.phones.0.normalized',
-    'client.phone_numbers.0.phone',
-    'client.phone_numbers.0.number',
-    'client.phone_numbers.0.value',
-    'client.contacts.0.phone',
-    'client.contacts.0.value',
-    'client.contacts.0.number',
 
     'metadata.client.phone',
     'metadata.client.mobile',
     'metadata.client.phone_number',
     'metadata.client.phoneNumber',
+    'metadata.client.phone.0',
     'metadata.client.phones.0.phone',
     'metadata.client.phones.0.number',
     'metadata.client.phones.0.value',
@@ -157,6 +154,7 @@ function findFirstPhone(obj) {
     'order.client.telephone',
     'order.client.phone_number',
     'order.client.phoneNumber',
+    'order.client.phone.0',
     'order.client.phones.0.phone',
     'order.client.phones.0.number',
     'order.client.phones.0.value',
@@ -166,9 +164,11 @@ function findFirstPhone(obj) {
     'data.client.telephone',
     'data.client.phone_number',
     'data.client.phoneNumber',
+    'data.client.phone.0',
     'data.client.phones.0.phone',
     'data.client.phones.0.number',
     'data.client.phones.0.value',
+
     'data.phone',
     'data.mobile',
     'data.phone_number',
@@ -182,14 +182,21 @@ function findFirstPhone(obj) {
     'contact.phone_number',
     'contact.phoneNumber',
 
+    'ro_api_order.phone.0',
+    'ro_api_order.phone',
+    'ro_api_order.mobile',
+    'ro_api_order.phone_number',
+
     'ro_api_order.client.phone',
     'ro_api_order.client.mobile',
     'ro_api_order.client.phone_number',
     'ro_api_order.client.phoneNumber',
+    'ro_api_order.client.phone.0',
     'ro_api_order.client.phones.0.phone',
     'ro_api_order.client.phones.0.number',
     'ro_api_order.client.phones.0.value',
 
+    'ro_api_client.phone.0',
     'ro_api_client.phone',
     'ro_api_client.mobile',
     'ro_api_client.phone_number',
@@ -202,6 +209,7 @@ function findFirstPhone(obj) {
     'ro_api_lead.client.mobile',
     'ro_api_lead.client.phone_number',
     'ro_api_lead.client.phoneNumber',
+    'ro_api_lead.client.phone.0',
     'ro_api_lead.client.phones.0.phone',
     'ro_api_lead.client.phones.0.number',
     'ro_api_lead.client.phones.0.value',
@@ -263,8 +271,8 @@ function findFirstId(obj, paths) {
 
 function getRoOrderId(payload) {
   return findFirstId(payload, [
-    'order.id',
     'metadata.order.id',
+    'order.id',
     'data.order.id',
     'context.order.id',
     'metadata.order_id',
@@ -294,8 +302,8 @@ function getRoLeadId(payload) {
 
 function getRoClientId(payload) {
   return findFirstId(payload, [
-    'client.id',
     'metadata.client.id',
+    'client.id',
     'customer.id',
     'data.client.id',
     'data.customer.id',
@@ -488,7 +496,8 @@ async function enrichRoOrderPayloadWithApi(payload) {
       'client.id',
       'customer.id',
       'data.client.id',
-      'order.client.id'
+      'order.client.id',
+      'id'
     ]);
 
   if (clientId) {
@@ -561,7 +570,8 @@ async function enrichRoLeadPayloadWithApi(payload) {
       'client.id',
       'customer.id',
       'client_id',
-      'customer_id'
+      'customer_id',
+      'id'
     ]);
 
   if (clientId) {
@@ -604,49 +614,68 @@ function getEventName(payload) {
 }
 
 function getClientName(payload) {
-  return String(pick(payload, [
-    'client.name',
-    'client.fullname',
-    'client.full_name',
-    'metadata.client.name',
+  const fullName = pick(payload, [
     'metadata.client.fullname',
     'metadata.client.full_name',
-    'client_name',
+    'metadata.client.name',
+    'client.fullname',
+    'client.full_name',
+    'client.name',
 
-    'customer.name',
-    'customer.fullname',
-    'customer_name',
-
-    'lead.name',
-    'metadata.lead.client.name',
-    'metadata.lead.client.fullname',
-
-    'appeal.name',
-    'order.client.name',
-    'order.client.fullname',
-    'metadata.order.client.name',
     'metadata.order.client.fullname',
+    'metadata.order.client.full_name',
+    'metadata.order.client.name',
+    'order.client.fullname',
+    'order.client.full_name',
+    'order.client.name',
 
-    'data.client.name',
-    'data.client.fullname',
-    'data.customer.name',
-
-    'contact.name',
-
+    'ro_api_client.first_name',
     'ro_api_client.name',
     'ro_api_client.fullname',
     'ro_api_client.full_name',
 
+    'ro_api_order.first_name',
+    'ro_api_order.name',
+    'ro_api_order.fullname',
+    'ro_api_order.full_name',
+
+    'ro_api_order.client.first_name',
     'ro_api_order.client.name',
     'ro_api_order.client.fullname',
     'ro_api_order.client.full_name',
 
+    'ro_api_lead.client.first_name',
     'ro_api_lead.client.name',
     'ro_api_lead.client.fullname',
     'ro_api_lead.client.full_name',
 
+    'customer.fullname',
+    'customer.name',
+    'lead.name',
+    'metadata.lead.client.fullname',
+    'metadata.lead.client.name',
+    'appeal.name',
+    'data.client.fullname',
+    'data.client.name',
+    'data.customer.name',
+    'contact.name',
+    'client_name',
+    'customer_name',
     'name'
-  ], 'Клиент')).trim();
+  ], '');
+
+  const firstName = pick(payload, [
+    'metadata.client.first_name',
+    'client.first_name',
+    'metadata.order.client.first_name',
+    'order.client.first_name',
+    'ro_api_client.first_name',
+    'ro_api_order.first_name',
+    'ro_api_order.client.first_name',
+    'ro_api_lead.client.first_name'
+  ], '');
+
+  return String(firstName || fullName || 'Клиент').trim();
 }
 
 function getRepairSubject(payload) {
@@ -675,10 +704,10 @@ function getRepairSubject(payload) {
     'data.comment',
     'data.description',
 
+    'metadata.order.name',
+    'order.name',
     'order.type',
     'order.device',
-    'order.name',
-    'metadata.order.name',
     'data.order.name',
 
     'device',
@@ -701,23 +730,26 @@ function getRepairSubject(payload) {
 
 function getOrderNumber(payload) {
   return String(pick(payload, [
-    'order.number',
-    'order.id',
-    'order.name',
-    'metadata.order.number',
-    'metadata.order.id',
     'metadata.order.name',
+    'order.name',
+    'data.order.name',
+    'ro_api_order.order.name',
+    'ro_api_order.number',
+
+    'metadata.order.number',
+    'order.number',
+    'data.order.number',
+    'ro_api_order.order.number',
+
+    'metadata.order.id',
+    'order.id',
     'order_id',
     'number',
-    'name',
     'id',
-    'data.order.number',
     'data.order.id',
-    'data.order.name',
     'data.id',
-    'ro_api_order.number',
-    'ro_api_order.id',
-    'ro_api_order.name'
+    'ro_api_order.order.id',
+    'ro_api_order.id'
   ], 'Без номера')).trim();
 }
 
@@ -757,17 +789,29 @@ function getOrderAmount(payload) {
     'amount',
     'total',
     'price',
+    'sum',
     'order.total',
     'order.amount',
+    'order.price',
+    'order.sum',
     'metadata.order.total',
     'metadata.order.amount',
+    'metadata.order.price',
+    'metadata.order.sum',
     'data.total',
     'data.amount',
+    'data.price',
+    'data.sum',
     'ro_api_order.total',
     'ro_api_order.amount',
     'ro_api_order.price',
+    'ro_api_order.sum',
     'ro_api_order.payed',
-    'ro_api_order.estimated_cost'
+    'ro_api_order.estimated_cost',
+    'ro_api_order.order.total',
+    'ro_api_order.order.amount',
+    'ro_api_order.order.price',
+    'ro_api_order.order.sum'
   ], '');
 
   const currency = pick(payload, [
@@ -775,7 +819,7 @@ function getOrderAmount(payload) {
     'order.currency',
     'data.currency',
     'ro_api_order.currency'
-  ], 'KZT');
+  ], '₸');
 
   return amount ? `${amount} ${currency}` : 'уточняется';
 }
@@ -820,7 +864,7 @@ function isOrderCreated(payload) {
   return (
     event.includes('order.created') ||
     (event.includes('order') && event.includes('created')) ||
-    objectType === 'order' && event.includes('created')
+    (objectType === 'order' && event.includes('created'))
   );
 }
 
@@ -968,7 +1012,9 @@ app.get('/health', (req, res) => {
     roApiConfigured: Boolean(REMONLINE_API_KEY),
     templateLang: WHATSAPP_TEMPLATE_LANG,
     readyStatusIds: [...READY_STATUS_IDS],
-    closedStatusIds: [...CLOSED_STATUS_IDS]
+    closedStatusIds: [...CLOSED_STATUS_IDS],
+    acceptedStatusIds: [...ACCEPTED_STATUS_IDS],
+    internalStatusIds: [...INTERNAL_STATUS_IDS]
   });
 });
 
@@ -1049,6 +1095,13 @@ async function handleRepairRequest(payload) {
 }
 
 async function handleOrderEvent(payload) {
+  const statusId = getNewStatusId(payload);
+
+  if (INTERNAL_STATUS_IDS.has(statusId)) {
+    log('Internal status, skip WhatsApp:', statusId);
+    return;
+  }
+
   const enriched = await enrichRoOrderPayloadWithApi(payload);
   const fullPayload = enriched.payload;
 
@@ -1073,7 +1126,7 @@ async function handleOrderEvent(payload) {
       getOrderAmount(fullPayload)
     ]);
 
-    return log('order_ready sent', clientPhone);
+    return log('order_ready sent', clientPhone, { clientName, orderNumber });
   }
 
   if (isOrderClosed(fullPayload)) {
@@ -1081,7 +1134,7 @@ async function handleOrderEvent(payload) {
       clientName
     ]);
 
-    return log('order_review_request sent', clientPhone);
+    return log('order_review_request sent', clientPhone, { clientName, orderNumber });
   }
 
   if (isOrderAccepted(fullPayload)) {
@@ -1090,7 +1143,7 @@ async function handleOrderEvent(payload) {
       orderNumber
     ]);
 
-    return log('order_accepted sent', clientPhone);
+    return log('order_accepted sent', clientPhone, { clientName, orderNumber });
   }
 
   if (isOrderStatusChanged(fullPayload)) {
@@ -1100,7 +1153,7 @@ async function handleOrderEvent(payload) {
       status
     ]);
 
-    return log('order_status_changed sent', clientPhone);
+    return log('order_status_changed sent', clientPhone, { clientName, orderNumber, status });
   }
 
   log('No matching order rule, skipped');
@@ -1169,16 +1222,16 @@ function defaultTemplateParams(template) {
     ],
     order_accepted: [
       'Павел',
-      '12345'
+      'B4582'
     ],
     order_status_changed: [
       'Павел',
-      '12345',
+      'B4582',
       'Готов к выдаче'
     ],
     order_ready: [
       'Павел',
-      '12345',
+      'B4582',
       'уточняется'
     ],
     order_review_request: [
@@ -1254,6 +1307,7 @@ app.get('/test-ro', async (req, res) => {
       phoneFromOrder: '',
       phoneFromLead: '',
       phoneFromClient: '',
+      guessedClientNameFromOrder: '',
       orderStatusId: '',
       orderStatus: ''
     };
@@ -1261,6 +1315,7 @@ app.get('/test-ro', async (req, res) => {
     if (orderId) {
       result.order = await fetchRoOrder(orderId);
       result.phoneFromOrder = findFirstPhone(result.order);
+      result.guessedClientNameFromOrder = getClientName({ ro_api_order: result.order });
       result.orderStatusId = getNewStatusId({ ro_api_order: result.order });
       result.orderStatus = getOrderStatus({ ro_api_order: result.order });
     }
