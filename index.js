@@ -21,9 +21,9 @@ const REMONLINE_API_KEY = process.env.REMONLINE_API_KEY || '';
 const REMONLINE_API_BASE_URL = (process.env.REMONLINE_API_BASE_URL || 'https://api.roapp.io/v2').replace(/\/+$/, '');
 
 const READY_STATUS_IDS = parseIdList(process.env.READY_STATUS_IDS || '363629');
-const CLOSED_STATUS_IDS = parseIdList(process.env.CLOSED_STATUS_IDS || '');
+const CLOSED_STATUS_IDS = parseIdList(process.env.CLOSED_STATUS_IDS || '363632');
 const ACCEPTED_STATUS_IDS = parseIdList(process.env.ACCEPTED_STATUS_IDS || '');
-const INTERNAL_STATUS_IDS = parseIdList(process.env.INTERNAL_STATUS_IDS || '');
+const INTERNAL_STATUS_IDS = parseIdList(process.env.INTERNAL_STATUS_IDS || '3045928');
 
 const RECEIPT_TEMPLATE_NAME = process.env.RECEIPT_TEMPLATE_NAME || 'order_closed_receipt';
 const RECEIPT_SEARCH_ENABLED = String(process.env.RECEIPT_SEARCH_ENABLED || 'true').toLowerCase() !== 'false';
@@ -143,13 +143,10 @@ function findFirstPhone(obj) {
     'client.phones.0.phone',
     'client.phones.0.number',
     'client.phones.0.value',
-    'client.phones.0.normalized',
 
     'data.client.phone',
     'data.client.mobile',
-    'data.client.telephone',
     'data.client.phone_number',
-    'data.client.phoneNumber',
     'data.client.phone.0',
     'data.client.phones.0.phone',
     'data.client.phones.0.number',
@@ -158,7 +155,6 @@ function findFirstPhone(obj) {
     'metadata.client.phone',
     'metadata.client.mobile',
     'metadata.client.phone_number',
-    'metadata.client.phoneNumber',
     'metadata.client.phone.0',
     'metadata.client.phones.0.phone',
     'metadata.client.phones.0.number',
@@ -166,9 +162,7 @@ function findFirstPhone(obj) {
 
     'order.client.phone',
     'order.client.mobile',
-    'order.client.telephone',
     'order.client.phone_number',
-    'order.client.phoneNumber',
     'order.client.phone.0',
     'order.client.phones.0.phone',
     'order.client.phones.0.number',
@@ -177,7 +171,6 @@ function findFirstPhone(obj) {
     'ro_api_order.client.phone',
     'ro_api_order.client.mobile',
     'ro_api_order.client.phone_number',
-    'ro_api_order.client.phoneNumber',
     'ro_api_order.client.phone.0',
     'ro_api_order.client.phones.0.phone',
     'ro_api_order.client.phones.0.number',
@@ -450,6 +443,12 @@ async function fetchRoClient(clientId) {
     `/contacts/${clientId}`,
     `/clients?ids[]=${clientId}`
   ], `client ${clientId}`);
+}
+
+async function fetchRoOrderPublicUrl(orderId) {
+  if (!orderId) return null;
+
+  return roApiGetRaw(`/orders/${orderId}/public-url`);
 }
 
 async function enrichRoOrderPayloadWithApi(payload) {
@@ -829,14 +828,6 @@ function parseMoneyValue(value) {
   return num;
 }
 
-function moneyLooksBadPath(path) {
-  return /id|phone|телефон|status|статус|number|номер|barcode|code|код|date|time|timestamp|created|updated|client|customer|employee|user|manager/i.test(path);
-}
-
-function moneyLooksGoodPath(path) {
-  return /total|sum|amount|price|cost|paid|payed|payment|balance|debt|due|to_pay|payable|grand|final|subtotal|work|service|goods|item|product|parts|materials|profit|estimated/i.test(path);
-}
-
 function formatMoney(num) {
   if (num === null || num === undefined || !Number.isFinite(num)) return '';
   const rounded = Math.round(num * 100) / 100;
@@ -848,63 +839,27 @@ function formatMoney(num) {
   return rounded.toFixed(2).replace('.', ',');
 }
 
-function getDirectAmountCandidate(payload) {
+function getOrderAmountDebug(payload) {
   const paths = [
     'ro_api_order.total',
-    'ro_api_order.sum',
-    'ro_api_order.amount',
-    'ro_api_order.price',
-    'ro_api_order.cost',
-    'ro_api_order.final_sum',
-    'ro_api_order.total_sum',
-    'ro_api_order.grand_total',
-    'ro_api_order.to_pay',
-    'ro_api_order.payable',
-    'ro_api_order.balance',
-    'ro_api_order.debt',
-    'ro_api_order.estimated_cost',
-
     'ro_api_order.data.total',
-    'ro_api_order.data.sum',
-    'ro_api_order.data.amount',
-    'ro_api_order.data.price',
-    'ro_api_order.data.cost',
-    'ro_api_order.data.final_sum',
-    'ro_api_order.data.total_sum',
-    'ro_api_order.data.grand_total',
-    'ro_api_order.data.to_pay',
-    'ro_api_order.data.payable',
-    'ro_api_order.data.balance',
-    'ro_api_order.data.debt',
-    'ro_api_order.data.estimated_cost',
-
     'ro_api_order.order.total',
-    'ro_api_order.order.sum',
-    'ro_api_order.order.amount',
-    'ro_api_order.order.price',
-    'ro_api_order.order.cost',
-    'ro_api_order.order.final_sum',
-    'ro_api_order.order.total_sum',
-    'ro_api_order.order.grand_total',
-    'ro_api_order.order.to_pay',
-    'ro_api_order.order.payable',
-    'ro_api_order.order.balance',
-    'ro_api_order.order.debt',
-    'ro_api_order.order.estimated_cost',
-
     'ro_api_order.data.order.total',
+
+    'ro_api_order.sum',
+    'ro_api_order.data.sum',
+    'ro_api_order.order.sum',
     'ro_api_order.data.order.sum',
+
+    'ro_api_order.amount',
+    'ro_api_order.data.amount',
+    'ro_api_order.order.amount',
     'ro_api_order.data.order.amount',
-    'ro_api_order.data.order.price',
-    'ro_api_order.data.order.cost',
-    'ro_api_order.data.order.final_sum',
-    'ro_api_order.data.order.total_sum',
-    'ro_api_order.data.order.grand_total',
-    'ro_api_order.data.order.to_pay',
-    'ro_api_order.data.order.payable',
-    'ro_api_order.data.order.balance',
-    'ro_api_order.data.order.debt',
-    'ro_api_order.data.order.estimated_cost',
+
+    'ro_api_order.payed',
+    'ro_api_order.data.payed',
+    'ro_api_order.order.payed',
+    'ro_api_order.data.order.payed',
 
     'amount',
     'total',
@@ -924,177 +879,30 @@ function getDirectAmountCandidate(payload) {
     'data.sum'
   ];
 
+  const candidates = [];
+
   for (const path of paths) {
     const raw = pick(payload, [path], '');
     const parsed = parseMoneyValue(raw);
 
     if (parsed !== null && parsed >= 0 && parsed < 100000000) {
-      return {
+      candidates.push({
+        path,
         value: parsed,
-        source: path,
         raw
-      };
+      });
     }
   }
 
-  return null;
-}
+  const best = candidates.find((c) => c.value > 0) || candidates[0];
 
-function findMoneyCandidates(obj) {
-  const candidates = [];
-
-  function walk(node, path = '', depth = 0) {
-    if (node == null || depth > 12) return;
-
-    if (typeof node === 'number' || typeof node === 'string') {
-      const value = parseMoneyValue(node);
-
-      if (
-        value !== null &&
-        value >= 0 &&
-        value < 100000000 &&
-        !moneyLooksBadPath(path) &&
-        moneyLooksGoodPath(path)
-      ) {
-        candidates.push({
-          path,
-          value,
-          raw: node
-        });
-      }
-
-      return;
-    }
-
-    if (Array.isArray(node)) {
-      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
-      return;
-    }
-
-    if (typeof node === 'object') {
-      for (const [key, value] of Object.entries(node)) {
-        walk(value, path ? `${path}.${key}` : key, depth + 1);
-      }
-    }
-  }
-
-  walk(obj);
-
-  return candidates
-    .sort((a, b) => {
-      const aPriority = /to_pay|payable|balance|debt|grand_total|final|total_sum|total|sum|amount|price/i.test(a.path) ? 0 : 1;
-      const bPriority = /to_pay|payable|balance|debt|grand_total|final|total_sum|total|sum|amount|price/i.test(b.path) ? 0 : 1;
-
-      if (aPriority !== bPriority) return aPriority - bPriority;
-      return String(a.path).localeCompare(String(b.path));
-    })
-    .slice(0, 50);
-}
-
-function computeAmountFromLineItems(payload) {
-  const arrays = [];
-
-  function walk(node, path = '', depth = 0) {
-    if (node == null || depth > 10) return;
-
-    if (Array.isArray(node)) {
-      if (/items|goods|services|works|parts|materials|products|positions|rows|lines|jobs|work/i.test(path)) {
-        arrays.push({
-          path,
-          items: node
-        });
-      }
-
-      node.forEach((item, i) => walk(item, `${path}.${i}`, depth + 1));
-      return;
-    }
-
-    if (typeof node === 'object') {
-      for (const [key, value] of Object.entries(node)) {
-        walk(value, path ? `${path}.${key}` : key, depth + 1);
-      }
-    }
-  }
-
-  walk(payload);
-
-  for (const arr of arrays) {
-    let total = 0;
-    let used = 0;
-
-    for (const item of arr.items) {
-      if (!item || typeof item !== 'object') continue;
-
-      const direct = getDirectAmountCandidate({ ro_api_order: item }) || getDirectAmountCandidate(item);
-
-      if (direct && direct.value > 0) {
-        total += direct.value;
-        used += 1;
-        continue;
-      }
-
-      const price = parseMoneyValue(pick(item, [
-        'price',
-        'cost',
-        'amount',
-        'unit_price',
-        'sale_price',
-        'data.price',
-        'data.cost',
-        'data.amount',
-        'data.unit_price'
-      ], ''));
-
-      const qty = parseMoneyValue(pick(item, [
-        'quantity',
-        'qty',
-        'count',
-        'amount_count',
-        'data.quantity',
-        'data.qty',
-        'data.count'
-      ], 1));
-
-      if (price !== null && price > 0) {
-        total += price * (qty && qty > 0 ? qty : 1);
-        used += 1;
-      }
-    }
-
-    if (used > 0 && total > 0) {
-      return {
-        value: total,
-        source: `computed:${arr.path}`,
-        used
-      };
-    }
-  }
-
-  return null;
-}
-
-function getOrderAmountDebug(payload) {
-  const direct = getDirectAmountCandidate(payload);
-
-  if (direct) {
+  if (best) {
     return {
-      value: direct.value,
-      formatted: `${formatMoney(direct.value)} ₸`,
-      source: direct.source,
-      raw: direct.raw,
-      candidates: findMoneyCandidates(payload)
-    };
-  }
-
-  const computed = computeAmountFromLineItems(payload);
-
-  if (computed) {
-    return {
-      value: computed.value,
-      formatted: `${formatMoney(computed.value)} ₸`,
-      source: computed.source,
-      raw: null,
-      candidates: findMoneyCandidates(payload)
+      value: best.value,
+      formatted: `${formatMoney(best.value)} ₸`,
+      source: best.path,
+      raw: best.raw,
+      candidates
     };
   }
 
@@ -1103,7 +911,7 @@ function getOrderAmountDebug(payload) {
     formatted: 'уточняется',
     source: 'not_found',
     raw: null,
-    candidates: findMoneyCandidates(payload)
+    candidates
   };
 }
 
@@ -1118,23 +926,19 @@ function extractUrlsFromText(value) {
   return matches.map((url) => url.replace(/[),.;]+$/g, ''));
 }
 
-function receiptPathLooksGood(path) {
-  return /receipt|check|cheque|fiscal|fiskal|kofd|ofd|webkassa|web-kassa|cashbox|payment|pay|invoice|bill|document|pdf|qr|чек|касс|фискал|оплат/i.test(path);
-}
-
 function receiptUrlLooksGood(url) {
-  return /cabinet\.kofd\.kz|kofd|ofd|webkassa|receipt|check|cheque|fiscal|pdf|consumer|qr/i.test(String(url || ''));
+  return /roapp\.page|cabinet\.kofd\.kz|kofd|ofd|webkassa|receipt|check|cheque|fiscal|pdf|consumer|qr/i.test(String(url || ''));
 }
 
-function scoreReceiptCandidate(candidate) {
-  const url = String(candidate.url || '');
-  const path = String(candidate.path || '');
+function scoreReceiptUrl(url) {
+  const value = String(url || '');
 
-  if (/cabinet\.kofd\.kz\/consumer/i.test(url)) return 0;
-  if (/kofd/i.test(url)) return 1;
-  if (/webkassa/i.test(url)) return 2;
-  if (/fiscal|receipt|check|cheque/i.test(url)) return 3;
-  if (receiptPathLooksGood(path)) return 4;
+  if (/cabinet\.kofd\.kz\/consumer/i.test(value)) return 0;
+  if (/kofd/i.test(value)) return 1;
+  if (/webkassa/i.test(value)) return 2;
+  if (/fiscal|receipt|check|cheque/i.test(value)) return 3;
+  if (/roapp\.page/i.test(value)) return 4;
+
   return 10;
 }
 
@@ -1148,11 +952,7 @@ function findReceiptCandidates(obj) {
     const cleanUrl = String(url).replace(/[),.;]+$/g, '');
 
     if (!/^https?:\/\//i.test(cleanUrl)) return;
-
-    const goodByUrl = receiptUrlLooksGood(cleanUrl);
-    const goodByPath = receiptPathLooksGood(path);
-
-    if (!goodByUrl && !goodByPath) return;
+    if (!receiptUrlLooksGood(cleanUrl)) return;
     if (seen.has(cleanUrl)) return;
 
     seen.add(cleanUrl);
@@ -1165,7 +965,7 @@ function findReceiptCandidates(obj) {
   }
 
   function walk(node, path = '', depth = 0) {
-    if (node == null || depth > 14) return;
+    if (node == null || depth > 12) return;
 
     if (typeof node === 'string' || typeof node === 'number') {
       for (const url of extractUrlsFromText(node)) {
@@ -1190,215 +990,77 @@ function findReceiptCandidates(obj) {
   walk(obj);
 
   return candidates.sort((a, b) => {
-    const scoreA = scoreReceiptCandidate(a);
-    const scoreB = scoreReceiptCandidate(b);
+    const scoreA = scoreReceiptUrl(a.url);
+    const scoreB = scoreReceiptUrl(b.url);
 
     if (scoreA !== scoreB) return scoreA - scoreB;
     return String(a.path).localeCompare(String(b.path));
   });
 }
 
-async function tryReceiptPath(path, label) {
-  try {
-    const data = await roApiGetRaw(path);
-    log(`RO API receipt ${label} success:`, path);
-    return {
-      path,
-      data
-    };
-  } catch (err) {
-    log(`RO API receipt ${label} failed:`, path, err.status || '', err.message);
-    return null;
-  }
-}
-
 async function findReceiptLink(orderId, baseOrderData = null) {
-  const sources = [];
-  const checked = [];
+  const sourcesChecked = [];
+  const candidates = [];
 
-  function remember(path, ok, error = '') {
-    checked.push({
+  function addSource(path, ok, error = '') {
+    sourcesChecked.push({
       path,
       ok,
       error: String(error || '').slice(0, 300)
     });
   }
 
-  if (baseOrderData) {
-    sources.push({
-      path: 'base_ro_api_order',
-      data: baseOrderData
-    });
+  function addCandidatesFrom(sourcePath, data) {
+    const found = findReceiptCandidates(data);
 
-    remember('base_ro_api_order', true);
-  }
-
-  const paths = [
-    // Сам заказ разными способами
-    `/orders/${orderId}`,
-    `/orders/${orderId}?include=payments`,
-    `/orders/${orderId}?include=receipts`,
-    `/orders/${orderId}?include=payments,receipts`,
-    `/orders/${orderId}?include=documents`,
-    `/orders/${orderId}?include=invoices`,
-    `/orders/${orderId}?include=checks`,
-    `/orders/${orderId}?include=fiscal`,
-    `/orders/${orderId}?include=cashbox`,
-    `/orders/${orderId}?include=webkassa`,
-    `/orders/${orderId}?expand=payments`,
-    `/orders/${orderId}?expand=receipts`,
-    `/orders/${orderId}?expand=documents`,
-    `/orders/${orderId}?expand=invoices`,
-    `/orders/${orderId}?expand=checks`,
-    `/orders/${orderId}?expand=fiscal`,
-    `/orders/${orderId}?expand=cashbox`,
-    `/orders/${orderId}?expand=webkassa`,
-
-    // Вложенные сущности заказа
-    `/orders/${orderId}/payments`,
-    `/orders/${orderId}/payments?include=receipt`,
-    `/orders/${orderId}/payments?include=receipts`,
-    `/orders/${orderId}/payments?include=check`,
-    `/orders/${orderId}/payments?include=checks`,
-    `/orders/${orderId}/payments?include=fiscal`,
-    `/orders/${orderId}/payments?include=webkassa`,
-    `/orders/${orderId}/payments?expand=receipt`,
-    `/orders/${orderId}/payments?expand=receipts`,
-    `/orders/${orderId}/payments?expand=check`,
-    `/orders/${orderId}/payments?expand=checks`,
-    `/orders/${orderId}/payments?expand=fiscal`,
-    `/orders/${orderId}/payments?expand=webkassa`,
-    `/orders/${orderId}/transactions`,
-    `/orders/${orderId}/cashbox-transactions`,
-    `/orders/${orderId}/cashbox_transactions`,
-    `/orders/${orderId}/receipts`,
-    `/orders/${orderId}/receipt`,
-    `/orders/${orderId}/checks`,
-    `/orders/${orderId}/check`,
-    `/orders/${orderId}/fiscal`,
-    `/orders/${orderId}/fiscal-receipts`,
-    `/orders/${orderId}/fiscal_receipts`,
-    `/orders/${orderId}/cashbox`,
-    `/orders/${orderId}/documents`,
-    `/orders/${orderId}/invoices`,
-    `/orders/${orderId}/invoice`,
-    `/orders/${orderId}/public-url`,
-    `/orders/${orderId}/public_url`,
-    `/orders/${orderId}/public`,
-
-    // Глобальные платежи / касса по order_id
-    `/payments?order_id=${orderId}`,
-    `/payments?orderId=${orderId}`,
-    `/payments?order=${orderId}`,
-    `/payments?filter[order_id]=${orderId}`,
-    `/payments?filter[orderId]=${orderId}`,
-    `/payments?include=receipt&order_id=${orderId}`,
-    `/payments?include=receipts&order_id=${orderId}`,
-    `/payments?include=check&order_id=${orderId}`,
-    `/payments?include=checks&order_id=${orderId}`,
-    `/payments?include=fiscal&order_id=${orderId}`,
-    `/payments?include=webkassa&order_id=${orderId}`,
-    `/payments?expand=receipt&order_id=${orderId}`,
-    `/payments?expand=receipts&order_id=${orderId}`,
-    `/payments?expand=check&order_id=${orderId}`,
-    `/payments?expand=checks&order_id=${orderId}`,
-    `/payments?expand=fiscal&order_id=${orderId}`,
-    `/payments?expand=webkassa&order_id=${orderId}`,
-
-    // Cashbox варианты
-    `/cashbox?order_id=${orderId}`,
-    `/cashbox?orderId=${orderId}`,
-    `/cashboxes?order_id=${orderId}`,
-    `/cashboxes?orderId=${orderId}`,
-    `/cashbox/transactions?order_id=${orderId}`,
-    `/cashbox/transactions?orderId=${orderId}`,
-    `/cashbox-transactions?order_id=${orderId}`,
-    `/cashbox-transactions?orderId=${orderId}`,
-    `/cashbox_transactions?order_id=${orderId}`,
-    `/cashbox_transactions?orderId=${orderId}`,
-    `/cashbox_transactions?filter[order_id]=${orderId}`,
-    `/cashbox-transactions?filter[order_id]=${orderId}`,
-    `/transactions?order_id=${orderId}`,
-    `/transactions?orderId=${orderId}`,
-    `/transactions?filter[order_id]=${orderId}`,
-
-    // Документы / инвойсы / чеки глобально
-    `/documents?order_id=${orderId}`,
-    `/documents?orderId=${orderId}`,
-    `/documents?filter[order_id]=${orderId}`,
-    `/invoices?order_id=${orderId}`,
-    `/invoices?orderId=${orderId}`,
-    `/invoices?filter[order_id]=${orderId}`,
-    `/receipts?order_id=${orderId}`,
-    `/receipts?orderId=${orderId}`,
-    `/receipts?filter[order_id]=${orderId}`,
-    `/checks?order_id=${orderId}`,
-    `/checks?orderId=${orderId}`,
-    `/checks?filter[order_id]=${orderId}`,
-    `/fiscal?order_id=${orderId}`,
-    `/fiscal?orderId=${orderId}`,
-    `/fiscal-receipts?order_id=${orderId}`,
-    `/fiscal-receipts?orderId=${orderId}`,
-    `/fiscal_receipts?order_id=${orderId}`,
-    `/fiscal_receipts?orderId=${orderId}`,
-
-    // Webkassa / OFD варианты
-    `/webkassa?order_id=${orderId}`,
-    `/webkassa?orderId=${orderId}`,
-    `/webkassa/receipts?order_id=${orderId}`,
-    `/webkassa/receipts?orderId=${orderId}`,
-    `/webkassa/checks?order_id=${orderId}`,
-    `/webkassa/checks?orderId=${orderId}`,
-    `/ofd?order_id=${orderId}`,
-    `/ofd?orderId=${orderId}`,
-    `/kofd?order_id=${orderId}`,
-    `/kofd?orderId=${orderId}`
-  ];
-
-  for (const path of paths) {
-    try {
-      const data = await roApiGetRaw(path);
-
-      remember(path, true);
-
-      sources.push({
-        path,
-        data
+    for (const item of found) {
+      candidates.push({
+        ...item,
+        sourcePath
       });
-
-      log('RO API receipt source success:', path);
-    } catch (err) {
-      remember(path, false, `${err.status || ''} ${err.message || ''}`);
-      log('RO API receipt source failed:', path, err.status || '', err.message);
     }
   }
 
-  const candidates = [];
+  if (baseOrderData) {
+    addSource('base_ro_api_order', true);
+    addCandidatesFrom('base_ro_api_order', baseOrderData);
+  }
 
-  for (const source of sources) {
-    const found = findReceiptCandidates(source.data);
+  try {
+    const publicUrlData = await fetchRoOrderPublicUrl(orderId);
 
-    for (const candidate of found) {
-      candidates.push({
-        ...candidate,
-        sourcePath: source.path
-      });
+    addSource(`/orders/${orderId}/public-url`, true);
+    addCandidatesFrom(`/orders/${orderId}/public-url`, publicUrlData);
+  } catch (err) {
+    addSource(`/orders/${orderId}/public-url`, false, `${err.status || ''} ${err.message || ''}`);
+    log('RO API public-url failed:', err.status || '', err.message);
+  }
+
+  if (!baseOrderData) {
+    try {
+      const orderData = await fetchRoOrder(orderId);
+
+      addSource(`/orders/${orderId}`, true);
+      addCandidatesFrom(`/orders/${orderId}`, orderData);
+    } catch (err) {
+      addSource(`/orders/${orderId}`, false, `${err.status || ''} ${err.message || ''}`);
+      log('RO API order fallback for receipt failed:', err.status || '', err.message);
     }
   }
 
   const unique = [];
   const seen = new Set();
 
-  for (const candidate of candidates) {
-    if (seen.has(candidate.url)) continue;
+  for (const item of candidates) {
+    if (seen.has(item.url)) continue;
 
-    seen.add(candidate.url);
-    unique.push(candidate);
+    seen.add(item.url);
+    unique.push(item);
   }
 
   unique.sort((a, b) => {
-    const scoreA = scoreReceiptCandidate(a);
-    const scoreB = scoreReceiptCandidate(b);
+    const scoreA = scoreReceiptUrl(a.url);
+    const scoreB = scoreReceiptUrl(b.url);
 
     if (scoreA !== scoreB) return scoreA - scoreB;
     return String(a.sourcePath).localeCompare(String(b.sourcePath));
@@ -1407,7 +1069,7 @@ async function findReceiptLink(orderId, baseOrderData = null) {
   return {
     link: unique[0]?.url || '',
     candidates: unique,
-    sourcesChecked: checked
+    sourcesChecked
   };
 }
 
@@ -1611,14 +1273,15 @@ function isOrderAccepted(payload) {
   );
 }
 
-function isOrderStatusChanged(payload) {
+function isOrderRelatedPayload(payload) {
   const event = getEventName(payload);
+  const objectType = String(pick(payload, ['context.object_type'], '')).toLowerCase();
 
   return (
-    event.includes('status') ||
-    event.includes('order.status') ||
     event.includes('order') ||
-    JSON.stringify(payload || {}).toLowerCase().includes('status')
+    event.includes('status') ||
+    objectType === 'order' ||
+    JSON.stringify(payload || {}).toLowerCase().includes('"order"')
   );
 }
 
@@ -1830,7 +1493,7 @@ async function handleOrderEvent(payload) {
   const amountDebug = getOrderAmountDebug(fullPayload);
   const orderId = getRoOrderId(payload) || getRoOrderId(fullPayload);
 
-  log('Order status debug:', {
+  log('Order debug:', {
     eventName: getEventName(payload),
     statusId: statusId || null,
     orderId: orderId || null,
@@ -1918,7 +1581,7 @@ app.post('/ro/webhook', async (req, res) => {
       return await handleRepairRequest(payload);
     }
 
-    if (isOrderCreated(payload) || isOrderStatusChanged(payload) || isOrderAccepted(payload)) {
+    if (isOrderCreated(payload) || isOrderRelatedPayload(payload) || isOrderAccepted(payload)) {
       return await handleOrderEvent(payload);
     }
 
@@ -1971,7 +1634,7 @@ function defaultTemplateParams(template) {
     order_closed_receipt: [
       'Павел',
       'B4582',
-      'https://cabinet.kofd.kz/consumer?test=1'
+      'https://c13xs.roapp.page/w/test/'
     ]
   };
 
@@ -2164,7 +1827,6 @@ app.get('/send-receipt', async (req, res) => {
 
     const order = await fetchRoOrder(orderId);
     const payloadForOrder = { ro_api_order: order };
-
     const receipt = await findReceiptLink(orderId, order);
 
     if (!receipt.link) {
@@ -2218,6 +1880,7 @@ app.get('/send-receipt', async (req, res) => {
     });
   }
 });
+
 app.get('/debug-ro-path', async (req, res) => {
   try {
     const path = String(req.query.path || '').trim();
@@ -2230,7 +1893,6 @@ app.get('/debug-ro-path', async (req, res) => {
     }
 
     const safePath = path.replace(/^\/+/, '');
-
     const data = await roApiGetRaw(`/${safePath}`);
 
     res.json({
@@ -2247,6 +1909,7 @@ app.get('/debug-ro-path', async (req, res) => {
     });
   }
 });
+
 app.use((req, res) => {
   res.status(404).json({
     ok: false,
