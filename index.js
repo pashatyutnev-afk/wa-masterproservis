@@ -1182,7 +1182,7 @@ function findReceiptCandidates(obj) {
 
     if (typeof node === 'object') {
       for (const [key, value] of Object.entries(node)) {
-        walk(value, path ? `${path}.${key}` : key, depth + 1));
+        walk(value, path ? `${path}.${key}` : key, depth + 1);
       }
     }
   }
