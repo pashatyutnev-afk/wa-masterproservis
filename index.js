@@ -22,11 +22,11 @@ const RO_SECRET = process.env.RO_SECRET || '';
 
 const READY_STATUS_IDS = parseIdList(process.env.READY_STATUS_IDS || '363629');
 const CLOSED_STATUS_IDS = parseIdList(process.env.CLOSED_STATUS_IDS || '363632');
-const ACCEPTED_STATUS_IDS = parseIdList(process.env.ACCEPTED_STATUS_IDS || '');
+const RECEIVED_STATUS_IDS = parseIdList(process.env.RECEIVED_STATUS_IDS || '');
 const INTERNAL_STATUS_IDS = parseIdList(process.env.INTERNAL_STATUS_IDS || '3045928');
 
 const TEMPLATE_SITE_REQUEST = process.env.TEMPLATE_SITE_REQUEST || 'new_repair_request_alert';
-const TEMPLATE_ORDER_ACCEPTED = process.env.TEMPLATE_ORDER_ACCEPTED || 'order_accepted';
+const TEMPLATE_ORDER_RECEIVED = process.env.TEMPLATE_ORDER_RECEIVED || 'order_received';
 const TEMPLATE_ORDER_READY = process.env.TEMPLATE_ORDER_READY || 'order_ready';
 const TEMPLATE_ORDER_CLOSED_REVIEW = process.env.TEMPLATE_ORDER_CLOSED_REVIEW || 'order_review_request';
 const TEMPLATE_ORDER_RECEIPT = process.env.TEMPLATE_ORDER_RECEIPT || 'order_closed_receipt';
@@ -474,7 +474,7 @@ function getOrderStatus(payload) {
 
   if (READY_STATUS_IDS.has(statusId)) return 'Готов к выдаче';
   if (CLOSED_STATUS_IDS.has(statusId)) return 'Выдан / закрыт';
-  if (ACCEPTED_STATUS_IDS.has(statusId)) return 'Принят';
+  if (RECEIVED_STATUS_IDS.has(statusId)) return 'Принят';
 
   return String(pick(payload, [
     'status.name',
@@ -779,12 +779,12 @@ function isOrderClosed(payload) {
   return CLOSED_STATUS_IDS.has(statusId) || status.includes('закрыт') || status.includes('выдан') || status.includes('closed') || status.includes('completed');
 }
 
-function isOrderAccepted(payload) {
+function isOrderReceived(payload) {
   const statusId = getNewStatusId(payload);
   const event = getEventName(payload);
   const status = getOrderStatus(payload).toLowerCase();
 
-  return isOrderCreated(payload) || ACCEPTED_STATUS_IDS.has(statusId) || status.includes('принят') || status.includes('новый заказ') || (event.includes('order') && event.includes('create'));
+  return isOrderCreated(payload) || RECEIVED_STATUS_IDS.has(statusId) || status.includes('принят') || status.includes('новый заказ') || (event.includes('order') && event.includes('create'));
 }
 
 function collectFormFields(obj) {
@@ -1143,13 +1143,13 @@ async function handleOrderEvent(payload) {
     return;
   }
 
-  if (isOrderAccepted(fullPayload)) {
-    await sendTemplate(clientPhone, TEMPLATE_ORDER_ACCEPTED, [
+  if (isOrderReceived(fullPayload)) {
+    await sendTemplate(clientPhone, TEMPLATE_ORDER_RECEIVED, [
       clientName,
       orderNumber
     ]);
 
-    log('order_accepted sent:', {
+    log('order_received sent:', {
       clientPhone,
       clientName,
       orderNumber
@@ -1184,7 +1184,7 @@ app.get('/health', (req, res) => {
     templateLang: WHATSAPP_TEMPLATE_LANG,
     templates: {
       flexbe: TEMPLATE_SITE_REQUEST,
-      orderAccepted: TEMPLATE_ORDER_ACCEPTED,
+      orderReceived: TEMPLATE_ORDER_RECEIVED,
       orderReady: TEMPLATE_ORDER_READY,
       orderClosedReview: TEMPLATE_ORDER_CLOSED_REVIEW,
       orderReceipt: TEMPLATE_ORDER_RECEIPT
@@ -1192,7 +1192,7 @@ app.get('/health', (req, res) => {
     statuses: {
       ready: [...READY_STATUS_IDS],
       closed: [...CLOSED_STATUS_IDS],
-      accepted: [...ACCEPTED_STATUS_IDS],
+      received: [...RECEIVED_STATUS_IDS],
       internal: [...INTERNAL_STATUS_IDS]
     },
     endpoints: {
