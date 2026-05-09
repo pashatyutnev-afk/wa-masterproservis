@@ -38,6 +38,7 @@ const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 const receiptJobs = new Set();
 const receiptSent = new Set();
+const reviewSent = new Set();
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -668,16 +669,76 @@ async function findReceiptLink(orderId, orderData = null) {
   };
 }
 
-function scheduleReceiptSearch({ orderId, clientPhone, clientName, orderNumber, orderData }) {
-  if (!RECEIPT_SEARCH_ENABLED || !orderId) return;
+async function sendReviewIfNeeded({ orderId, clientPhone, clientName, orderNumber, reason }) {
+  const key = String(orderId || `${clientPhone}:${orderNumber}`);
 
-  const key = String(orderId);
+  if (reviewSent.has(key)) {
+    log('Review already sent, skip:', { orderId, orderNumber, reason });
+    return;
+  }
 
-  if (receiptSent.has(key) || receiptJobs.has(key)) return;
+  try {
+    await sendTemplate(clientPhone, TEMPLATE_ORDER_CLOSED_REVIEW, [clientName]);
+
+    reviewSent.add(key);
+
+    log('order_review_request sent:', {
+      clientPhone,
+      clientName,
+      orderNumber,
+      orderId,
+      reason
+    });
+  } catch (err) {
+    console.error('order_review_request send error:', err.data || err.message || err);
+  }
+}
+
+function scheduleReceiptThenReview({ orderId, clientPhone, clientName, orderNumber, orderData }) {
+  const key = String(orderId || `${clientPhone}:${orderNumber}`);
+
+  if (!RECEIPT_SEARCH_ENABLED || !orderId) {
+    log('Receipt search disabled or orderId missing. Sending review without receipt:', {
+      orderId,
+      orderNumber
+    });
+
+    setTimeout(() => {
+      sendReviewIfNeeded({
+        orderId,
+        clientPhone,
+        clientName,
+        orderNumber,
+        reason: 'receipt_search_disabled_or_no_order_id'
+      }).catch((err) => {
+        console.error('Review fallback fatal error:', err.data || err.message || err);
+      });
+    }, 0);
+
+    return;
+  }
+
+  if (reviewSent.has(key)) {
+    log('Close flow already finished, skip:', {
+      orderId,
+      orderNumber
+    });
+
+    return;
+  }
+
+  if (receiptJobs.has(key)) {
+    log('Receipt then review job already scheduled, skip:', {
+      orderId,
+      orderNumber
+    });
+
+    return;
+  }
 
   receiptJobs.add(key);
 
-  log('Receipt search scheduled:', {
+  log('Receipt then review scheduled:', {
     orderId: key,
     orderNumber,
     retries: RECEIPT_RETRY_MS
@@ -685,7 +746,7 @@ function scheduleReceiptSearch({ orderId, clientPhone, clientName, orderNumber, 
 
   RECEIPT_RETRY_MS.forEach((ms, index) => {
     const timer = setTimeout(() => {
-      attemptReceiptSend({
+      attemptReceiptThenReview({
         orderId: key,
         clientPhone,
         clientName,
@@ -694,7 +755,7 @@ function scheduleReceiptSearch({ orderId, clientPhone, clientName, orderNumber, 
         attempt: index + 1,
         isLast: index === RECEIPT_RETRY_MS.length - 1
       }).catch((err) => {
-        console.error('Receipt attempt fatal error:', err.data || err.message || err);
+        console.error('Receipt then review attempt fatal error:', err.data || err.message || err);
       });
     }, ms);
 
@@ -702,17 +763,52 @@ function scheduleReceiptSearch({ orderId, clientPhone, clientName, orderNumber, 
   });
 }
 
-async function attemptReceiptSend({ orderId, clientPhone, clientName, orderNumber, orderData, attempt, isLast }) {
-  if (receiptSent.has(orderId)) return;
+async function attemptReceiptThenReview({ orderId, clientPhone, clientName, orderNumber, orderData, attempt, isLast }) {
+  const key = String(orderId);
 
-  const result = await findReceiptLink(orderId, orderData);
+  if (reviewSent.has(key)) {
+    receiptJobs.delete(key);
+    return;
+  }
+
+  if (receiptSent.has(key)) {
+    receiptJobs.delete(key);
+
+    await sendReviewIfNeeded({
+      orderId: key,
+      clientPhone,
+      clientName,
+      orderNumber,
+      reason: 'receipt_already_sent'
+    });
+
+    return;
+  }
+
+  const result = await findReceiptLink(key, orderData);
 
   if (!result.link) {
-    log('Receipt link not found yet:', { orderId, orderNumber, attempt });
+    log('Receipt link not found yet:', {
+      orderId: key,
+      orderNumber,
+      attempt
+    });
 
     if (isLast) {
-      receiptJobs.delete(orderId);
-      log('Receipt search finished without link:', { orderId, orderNumber });
+      receiptJobs.delete(key);
+
+      log('Receipt search finished without link. Sending review:', {
+        orderId: key,
+        orderNumber
+      });
+
+      await sendReviewIfNeeded({
+        orderId: key,
+        clientPhone,
+        clientName,
+        orderNumber,
+        reason: 'receipt_link_not_found'
+      });
     }
 
     return;
@@ -725,21 +821,43 @@ async function attemptReceiptSend({ orderId, clientPhone, clientName, orderNumbe
       result.link
     ]);
 
-    receiptSent.add(orderId);
-    receiptJobs.delete(orderId);
+    receiptSent.add(key);
+    receiptJobs.delete(key);
 
     log('order_closed_receipt sent:', {
       clientPhone,
       clientName,
       orderNumber,
-      orderId,
+      orderId: key,
       receiptUrl: result.link
+    });
+
+    await sendReviewIfNeeded({
+      orderId: key,
+      clientPhone,
+      clientName,
+      orderNumber,
+      reason: 'receipt_sent_first'
     });
   } catch (err) {
     console.error('order_closed_receipt send error:', err.data || err.message || err);
 
     if (isLast) {
-      receiptJobs.delete(orderId);
+      receiptJobs.delete(key);
+
+      log('Receipt link found but receipt template failed after last attempt. Sending review:', {
+        orderId: key,
+        orderNumber,
+        receiptUrl: result.link
+      });
+
+      await sendReviewIfNeeded({
+        orderId: key,
+        clientPhone,
+        clientName,
+        orderNumber,
+        reason: 'receipt_template_failed'
+      });
     }
   }
 }
@@ -1124,7 +1242,7 @@ async function handleOrderEvent(payload) {
   }
 
   if (isOrderClosed(fullPayload)) {
-    scheduleReceiptSearch({
+    scheduleReceiptThenReview({
       orderId,
       clientPhone,
       clientName,
@@ -1132,12 +1250,11 @@ async function handleOrderEvent(payload) {
       orderData: fullPayload.ro_api_order
     });
 
-    await sendTemplate(clientPhone, TEMPLATE_ORDER_CLOSED_REVIEW, [clientName]);
-
-    log('order_review_request sent:', {
+    log('Closed order flow started: receipt first, review after receipt:', {
       clientPhone,
       clientName,
-      orderNumber
+      orderNumber,
+      orderId
     });
 
     return;
@@ -1195,6 +1312,7 @@ app.get('/health', (req, res) => {
       received: [...RECEIVED_STATUS_IDS],
       internal: [...INTERNAL_STATUS_IDS]
     },
+    closeFlow: 'receipt_first_then_review',
     endpoints: {
       flexbeWebhook: '/site-repair-request',
       remonlineWebhook: '/ro/webhook'
